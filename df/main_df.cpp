@@ -106,7 +106,7 @@ int main(int argc, char** argv){
   // ... input files
   string filredshiftlist,filsnaplist, filtimelist, filfilters, idc;
   // ... directories
-  string pathsnap, bc03dir, rdir; // = "/dati1/cgiocoli/CoDECS/";
+  string pathsnap, bc03dir, rdir; 
   // ! SED units: L_lambda; sed resolution for bc03: lr.
   string model,imf;
   string pixunits="uJy";
@@ -145,7 +145,7 @@ int main(int argc, char** argv){
   }
   else{
     cout << "  " << endl;
-    cout << " planes_list.txt: " << fplane << endl;
+    cout << " planes list file " << fplane << endl;
     cout << " does not exists for this snapshot. " << endl;
     cout << " I will STOP here!!! " << endl;
     exit(1);
@@ -196,7 +196,7 @@ int main(int argc, char** argv){
     listfilter.close();
   }  		 
   else{
-    cout << " filter list file does not " << endl;   
+    cout << " filter list file " << filfilterlist << "does not " << endl;   
     cout << " exist in the Code dir ... check this out      " << endl;
     cout << "    I will STOP here !!! " << endl;
     exit(1);
@@ -243,7 +243,7 @@ int main(int argc, char** argv){
     timelist.close();
   }  		 
   else{
-    cout << " time list file timelist.txt does not " << endl;
+    cout << " time list file " << filtimelist  <<" does not " << endl;
     cout << " exist in the Code dir ... check this out      " << endl;
     cout << "    I will STOP here !!! " << endl;
     exit(1);
@@ -316,7 +316,7 @@ int main(int argc, char** argv){
     agelist.close();
   }
   else{
-    cout << " time list file " << filagelist << ".txt does not " << endl;
+    cout << " time list file " << filagelist << " does not " << endl;
     cout << " exist in the Code dir ... check this out      " << endl;
     cout << "    I will STOP here !!! " << endl;
     exit(1);
