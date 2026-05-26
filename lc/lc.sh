@@ -1,7 +1,7 @@
 #!/bin/bash
 
 #write by hand the snapshot avalaible in your directory 
-declare -a snapshots=(1 23 45)
+declare -a snapshots=(98 70 60)
 
 nl=$(cat planes_list.txt | wc -l)
 declare -a x
@@ -24,7 +24,7 @@ do
 
 	       echo "${x[$i-1]}" > ${x[$i-1]}.d
 	       #change the name of the executable if needed
-	       ./executable_lc ${y[$i]} ${x[$i-1]}
+	       echo ./executable_lc ${y[$i]} ${x[$i-1]}
 	       echo "from bash: snap = ${y[$i]}"
 	       rm ${x[$i-1]}.d
 	fi

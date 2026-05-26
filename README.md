@@ -115,3 +115,75 @@ archivePrefix = {arXiv},
       adsnote = {Provided by the SAO/NASA Astrophysics Data System}
 }
 ```
+
+## Module Details (detailed)
+
+Below are short, practical descriptions of what each module actually does, their inputs and outputs, and notes useful to run and extend the code.
+
+- **lc/**
+  - Purpose: construct the lightcone from simulation snapshots (TNG style). `main_lc.cpp` reads particle data (stars/gas) from HDF5 snapshot files, selects particles inside the chosen field of view and redshift slice (plane), and writes particle-level catalogs used by downstream modules.
+  - Key files: `main_lc.cpp`, `readTNGParticle.*` (HDF5 reader and helpers), `functions.*` (utility routines), `planes_list.txt` (plane definitions), `lc.ini` (module configuration).
+  - Inputs: per-snapshot HDF5 files (PartType4 = stars, PartType0 = gas), `planes_list.txt`, filter definitions, `lc.ini`.
+  - Outputs: ASCII particle-in-FOV catalogs (one per partition/plane), runtime logs and auxiliary index files used by `df` and `dc`.
+  - Run notes: `lc` must be run once per (snapshot,plane) partition listed in `planes_list.txt`.
+
+- **df/**
+  - Purpose: compute dust-free photometry for stellar particles (k-corrections and mapping SSP properties to fluxes in desired filters). Takes the particle catalog from `lc` and outputs fluxes before dust attenuation.
+  - Key files: `main_df.cpp`, `functions.*`, `df.ini`.
+  - Inputs: `lc` particle catalog, SSP tables (e.g., BC03 or CB16), `df.ini`, filters.
+  - Outputs: ASCII catalogs with dust-free flux columns per filter.
+
+- **dc/**
+  - Purpose: compute dust attenuation using the gas properties from the snapshots. For each galaxy or local region the module integrates gas column densities/metallicities to estimate optical depth and correct the fluxes.
+  - Key files: `main_dc.cpp`, `functions.*`, `dc.ini`.
+  - Inputs: `df` dust-free flux catalogs and snapshot gas properties (PartType0) as needed.
+  - Outputs: dust-corrected flux catalogs used by `igm` and postprocessing.
+
+- **igm/**
+  - Purpose: apply intergalactic medium (IGM) attenuation to dust-corrected fluxes. The implementation uses the prescription in `IGM_Ino14.cpp` (Inoue et al. 2014).
+  - Key files: `main_igm.cpp`, `IGM_Ino14.*`, `igm.ini`.
+  - Inputs: dust-corrected catalogs from `dc`, redshifts of sources, and filters.
+  - Outputs: final corrected flux catalogs ready for image-making and catalog production.
+
+- **postprocessing/**
+  - Purpose: create galaxy catalogs and images from the per-plane catalogs and flux outputs. Includes Python utilities `galaxy_cat.py`, `merge_cat.py`, `sum_fits.py` to merge planes and build final catalogs; `create_image/` contains C++ utilities to rasterize fluxes into FITS images.
+  - Key files: `create_image/create_image.cpp`, `galaxy_cat.py`, `merge_cat.py`.
+  - Inputs: final flux catalogs from `igm` (or `dc` if skipping IGM), filters, image configuration (`image.ini`).
+  - Outputs: FITS images (16-bit float), stacked survey images, combined galaxy catalogs.
+
+## macOS / Homebrew notes (Apple Silicon friendly)
+
+- The `lc/Makefile` was updated to detect Homebrew via `brew --prefix` (falls back to `/opt/homebrew`) and adds `-I$(BREW_PREFIX)/include` and `-L$(BREW_PREFIX)/lib` automatically. If you have Homebrew in a non-standard location, set `BREW_PREFIX` in the Makefile or export it in your shell.
+- Example install command for required libraries on macOS (Apple Silicon):
+
+```bash
+brew install gsl fftw hdf5 armadillo cfitsio ccfits eigen openblas
+```
+
+- The `lc` module compiles with `-std=c++17` (Eigen requires C++14+). If you encounter standard-library errors, ensure your Xcode Command Line Tools and Homebrew packages are up to date.
+
+## Quick Build Matrix
+
+- Build `lc` (example):
+
+```bash
+cd lc
+make check   # optional; verifies Homebrew libs
+make         # produces ./executable_lc
+```
+
+- Build image creator:
+
+```bash
+cd postprocessing/create_image
+make
+```
+
+## Next steps I can help with
+
+- Add per-function docstrings and a developer guide for `readTNGParticle` and `IGM_Ino14`.
+- Replace deprecated `sprintf` usage with `snprintf` across the codebase.
+- Add small example inputs and a test run for the `lc` module.
+
+If you want me to expand documentation for specific files or functions (for instance `readTNGParticle.h` or `IGM_Ino14.cpp`), tell me which file and I'll produce function-level explanations and example usage.
+

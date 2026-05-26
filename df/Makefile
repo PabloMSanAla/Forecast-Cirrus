@@ -1,44 +1,50 @@
-# executable name 
+#############################################################################
+# Makefile adapted for macOS Homebrew (Apple Silicon)
+# - Uses Homebrew prefix for includes/libs
+# - Uses clang++ by default and macOS Accelerate framework for BLAS/LAPACK
+#############################################################################
+
+# executable name
 PROG = ./executable_df
 
 MAIN = main_df.cpp readTNGParticle.cpp SED.cpp functions.cpp
 
-LDFLAGS +=-Wl,-rpath -larmadillo -llapack -lblas -lstdc++
+# Detect Homebrew prefix (fallback to /opt/homebrew for Apple Silicon)
+BREW_PREFIX ?= $(shell brew --prefix 2>/dev/null || echo /opt/homebrew)
 
+CXX := clang++
+CXXFLAGS := -std=c++17 -O2 -g
 
-LIBS = -L/usr/lib/x86_64-linux-gnu/  -lgsl -lgslcblas  \
-       -L/usr/lib/x86_64-linux-gnu/ \
-       -L/usr/lib/x86_64-linux-gnu/ -lcfitsio -lCCfits \
-       -L/usr/lib/x86_64-linux-gnu/ -lfftw3 -lm \
-       -L/usr/lib/x86_64-linux-gnu/hdf5/serial -lhdf5 -lhdf5_cpp
+# Include paths (add more if your headers are elsewhere)
+CPPFLAGS := -I$(BREW_PREFIX)/include -I$(BREW_PREFIX)/include/eigen3 -I./
 
-# gsl, cfitsio, CCfits, fftw  
-ALLFLAGS = -I/usr/local/include/gsl/ \
-           -I/usr/include/ \
-           -I/usr/local/include/CCfits/ \
-           -I/usr/lib/x86_64-linux-gnu/ \
-           -I/usr/local/include/ \
-           -I//usr/include/eigen3/ \
-           -I//usr/lib/x86_64-linux-gnu/hdf5/serial/ \
-	   -I/usr/include/hdf5/serial/ \
-           -I./
+# Linker flags: search Homebrew libs and set rpath so runtime finds them
+LDFLAGS := -L$(BREW_PREFIX)/lib -Wl,-rpath,$(BREW_PREFIX)/lib
 
-# 
-DEBUG = -g -O2 
+# Libraries: prefer Homebrew libs; use Accelerate for BLAS/LAPACK on macOS
+LIBS := -lgsl -lgslcblas -lcfitsio -lCCfits -lfftw3 -larmadillo -lhdf5 -lhdf5_cpp -lm -framework Accelerate
 
-CC = /usr/bin/cc -std=c++11 -lstdc++ 
-
-#
-RM = rm -f -r
-#
-OBJ = $(SOURCES:.cpp=.o)
-#
-
-CFLAGS=-O2 -g -fPIC -DPIC
-
+# Default target
 default: main
-main: 
-	$(CC) $(CFLAGS) ${ALLFLAGS} $(MAIN) ${LIBS} ${LDFLAGS} -o ${PROG}
+
+main:
+	$(CXX) $(CXXFLAGS) $(CPPFLAGS) $(MAIN) $(LDFLAGS) $(LIBS) -o $(PROG)
+
+# Check Homebrew and expected libraries
+# Run `make -C df check` to verify common dependencies installed via Homebrew
+check:
+	@echo "Homebrew prefix: $(BREW_PREFIX)"
+	@test -d "$(BREW_PREFIX)" || (echo "Homebrew not found at $(BREW_PREFIX). Install Homebrew."; exit 1)
+	@missing=""
+	@for lib in libgsl libfftw3 libhdf5 libarmadillo libcfitsio libCCfits; do \
+	  if ls $(BREW_PREFIX)/lib/$$lib*.dylib > /dev/null 2>&1 || ls $(BREW_PREFIX)/lib/$$lib*.a > /dev/null 2>&1; then \
+	    echo "$$lib: found"; \
+	  else \
+	    echo "$$lib: MISSING"; missing="yes"; \
+	  fi; \
+	done; \
+	if [ -n "$$missing" ]; then echo "Some libraries missing. Install via Homebrew, e.g.: brew install gsl fftw hdf5 armadillo cfitsio ccfits"; exit 1; fi
+
 clean:
-	$(RM) $(PROG) $(OBJ) *~
+	rm -f $(PROG) *.o *~
 

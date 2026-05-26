@@ -13,13 +13,13 @@
 #include <stdio.h>     
 #include <stdlib.h>     
 #include <ctime>
-#include <bits/stdc++.h> 
+#include <bits/stdc++.h>
 #include <typeinfo>
 #include <cassert>
 #include <dirent.h>
 //#include <readSUBFIND.h>
-#include "/usr/include/hdf5/serial/H5Cpp.h"
-#include </usr/include/eigen3/Eigen/Dense>
+#include <H5Cpp.h>
+#include <Eigen/Dense>
 #include "readTNGParticle.h"
 #define ARMA_DONT_USE_WRAPPER
 #include <armadillo>
@@ -615,7 +615,12 @@ int main(int argc, char** argv){
   cout << " " << endl;
   cout << " FORECAST uses " << nsnaps << " snapshots (including replications) for this image simulations" << endl;
   
-  int nsnap=iplrestart;
+  int nsnap = iplrestart - 1;  // Convert from display plane number (1-indexed) to array index (0-indexed)
+  
+  if(nsnap < 0 || nsnap >= nsnaps){
+    cout << " invalid restart plane number " << iplrestart << " (valid range: 1-" << nsnaps << ")" << endl;
+    exit(1);
+  }
   
   if(blD2[nsnap]-blD[nsnap] < 0){
     cout << " comoving distance of the starting point " << blD[nsnap] << endl;
@@ -719,7 +724,7 @@ int main(int argc, char** argv){
   }  
   tngParticle.readOffset();
   gcOffsetsTypeS = tngParticle.getStarsByType();
-  
+
   // stars: filtering out spurious particles, computing age etc - this is specific for TNG simulation
   int datalen= Met4_.size();
   for (int i=0; i<datalen; i++){
@@ -984,10 +989,15 @@ int main(int argc, char** argv){
 
     cout << " " << endl;
     cout << " ... Coordinates & redshift limits ..." << endl;
+    if (!xtmp.empty() && !ytmp.empty() && !zreds.empty()) {
     cout << "xmin, xmax in Mpc/h " << double(*min_element(xtmp.begin(), xtmp.end())) << ", " << double(*max_element(xtmp.begin(), xtmp.end())) << endl;
     cout << "ymin, ymax in Mpc/h " << double(*min_element(ytmp.begin(), ytmp.end())) << ", " << double(*max_element(ytmp.begin(), ytmp.end())) << endl;
     cout << "zmin, zmax in Mpc/h " << double(*min_element(zreds.begin(), zreds.end())) << ", " << double(*max_element(zreds.begin(), zreds.end())) << endl;
     cout << " " << endl;
+    } else {
+    cout << "One or more vectors are empty!" << endl;
+    }
+    
     
     // find SHid of only the particles included in the field of view
     idshs =inverseMap_sh_idv3(gcLenTypeS,gcOffsetsTypeS,ids, true);
@@ -1091,6 +1101,6 @@ int main(int argc, char** argv){
   auto duration = duration_cast<microseconds>(stop - start);
   cout << "execution time in [h] " <<  2.77778e-10*duration.count() << endl;
   std::cout << "----------------------------------------------------------------------" << endl; 
-  exit(1);
+  exit(0);
   
 }
