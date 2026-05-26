@@ -13,14 +13,13 @@
 #include <stdio.h>     
 #include <stdlib.h>     
 #include <ctime>
-#include <bits/stdc++.h> 
 #include <typeinfo>
 #include <cassert>
 #ifdef COSMOLIB
 #include <cosmo.h>
 #endif
-#include "/usr/include/hdf5/serial/H5Cpp.h"
-#include </usr/include/eigen3/Eigen/Dense>
+#include <H5Cpp.h>
+#include <Eigen/Dense>
 #include "readTNGParticle.h"
 #define ARMA_DONT_USE_WRAPPER
 #include <armadillo>
