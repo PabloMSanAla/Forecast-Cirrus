@@ -293,7 +293,7 @@ int index_closest(std::vector<float>::iterator begin, std::vector<float>::iterat
 //read .ini file parameters
 void readParameters(double *boxl, double *zs,
 		    string *filfilters, string *filredshiftlist,string *filsnaplist, string *filtimelist, string *idc, 
-		    string *pathsnap, string *bc03dir, string *rdir,
+		    string *pathsnap, string *lcpath, string *bc03dir, string *rdir,
 		    string *model, string *imf){ 
 
   string butstr;
@@ -316,6 +316,8 @@ void readParameters(double *boxl, double *zs,
     inputf >> *idc;
     inputf >> butstr; // path where the snaphosts are located
     inputf >> *pathsnap;
+    inputf >> butstr; // path where the outputs of lc module are located
+    inputf >> *lcpath;
     inputf >> butstr; // path where bc03 software is  located
     inputf >> *bc03dir;
     inputf >> butstr; // path where outputs are located

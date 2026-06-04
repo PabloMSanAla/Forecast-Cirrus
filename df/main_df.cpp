@@ -105,7 +105,7 @@ int main(int argc, char** argv){
   // ... input files
   string filredshiftlist,filsnaplist, filtimelist, filfilters, idc;
   // ... directories
-  string pathsnap, bc03dir, rdir; 
+  string pathsnap, bc03dir, rdir, lcpath; 
   // ! SED units: L_lambda; sed resolution for bc03: lr.
   string model,imf;
   string pixunits="uJy";
@@ -118,7 +118,7 @@ int main(int argc, char** argv){
   
   readParameters(&boxl,&zs,
 		 &filfilters,&filredshiftlist,&filsnaplist,&filtimelist,&idc,
-		 &pathsnap,&bc03dir,&rdir,
+		 &pathsnap,&lcpath,&bc03dir,&rdir,
 		 &model,&imf);
 
   
@@ -346,7 +346,7 @@ int main(int argc, char** argv){
   cout << " .. content: #(ids,x,y,redshift,mass,intial mass,metallicity, -, age, -, CM of sh with ids, Nparticles of sh with ids in sim) for stellar particles;" << endl;
   cout << endl;
   // Reading particle catalog created by the previous module lc
-  string filoutcat="../lc/coords.lc."+snappl+"_"+conv(iplrestart,fINT)+".txt";
+  string filoutcat=lcpath+"coords.lc."+snappl+"_"+conv(iplrestart,fINT)+".txt";
   ifstream ocf;
   ocf.open(filoutcat.c_str());
   if(ocf.is_open()){
@@ -559,5 +559,5 @@ int main(int argc, char** argv){
   auto duration = duration_cast<microseconds>(stop - start);
   cout << "execution time in [h] " <<  2.77778e-10*duration.count() << endl;
   std::cout << "----------------------------------------------------------------------" << endl;             
-
+  exit(0);
 }
