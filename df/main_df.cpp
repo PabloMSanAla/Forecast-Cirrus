@@ -84,19 +84,39 @@ int main(int argc, char** argv){
   cout << "   -                 Let there be light!                - " << endl;
   cout << "   ------------------------------------------------------ " << endl;
 
+  // Check that the correct number of arguments is provided
+  if (argc < 3) {
+        std::cerr << "Error: Missing arguments.\n";
+        std::cerr << "Usage: " << argv[0] << " <snapshot> <plane>\n";
+        std::cerr << "Example: " << argv[0] << " 99 0\n";
+        std::cerr << "This will process snapshot 99 and plane 0.\n";
+        return 1; // Exit with an error code
+    }
+  
   // check if the file restart exsits ... 
-  std:: string fileplstart = std::string(argv[2])+".d";
-  int iplrestart=0;
-  std:: ifstream infileplstart;
-  infileplstart.open(fileplstart.c_str());
-  if(infileplstart.is_open()){
-    std::cout << " " << std:: endl;
-    std:: cout << " I will read the restart file >> " << fileplstart << std:: endl;
-    infileplstart >> iplrestart;
-    std:: cout << " iplrestart = " << iplrestart << std:: endl;
-    std:: cout << " " << std:: endl;
-    infileplstart.close();
+  // std:: string fileplstart = std::string(argv[2])+".d";
+  // int iplrestart=0;
+  // std:: ifstream infileplstart;
+  // infileplstart.open(fileplstart.c_str());
+  // if(infileplstart.is_open()){
+  //   std::cout << " " << std:: endl;
+  //   std:: cout << " I will read the restart file >> " << fileplstart << std:: endl;
+  //   infileplstart >> iplrestart;
+  //   std:: cout << " iplrestart = " << iplrestart << std:: endl;
+  //   std:: cout << " " << std:: endl;
+  //   infileplstart.close();
+  // }
+
+  // Check that first and second arguments are integers
+  try {
+    std::stoi(argv[1]);
+    std::stoi(argv[2]);
+  } catch (const std::invalid_argument& e) {
+    std::cerr << "Error: Both arguments must be integers." << std::endl;
+    return 1;
   }
+
+  int iplrestart = std::stoi(argv[2]);
 
  
   // ******************** to be read in the INPUT file ********************
@@ -110,12 +130,14 @@ int main(int argc, char** argv){
   string model,imf;
   string pixunits="uJy";
   
-  int sourceID=std::atoi(argv[1]);
+  int sourceID=std::stoi(argv[1]);
   float blD, blD2;
   string snappl;
   double zsim;
   int n_pl=0;
-  
+
+  cout << "Initialize DF module for plane number: " << iplrestart<< "and snapshot ID: " << sourceID << endl;
+
   readParameters(&boxl,&zs,
 		 &filfilters,&filredshiftlist,&filsnaplist,&filtimelist,&idc,
 		 &pathsnap,&lcpath,&bc03dir,&rdir,
