@@ -136,7 +136,7 @@ int main(int argc, char** argv){
   double zsim;
   int n_pl=0;
 
-  cout << "Initialize DF module for plane number: " << iplrestart<< "and snapshot ID: " << sourceID << endl;
+  cout << "Initialize DF module for plane number: " << iplrestart<< " and snapshot: " << sourceID << endl;
 
   readParameters(&boxl,&zs,
 		 &filfilters,&filredshiftlist,&filsnaplist,&filtimelist,&idc,
@@ -502,6 +502,10 @@ int main(int argc, char** argv){
 	m_ = m_ - 2.5*log10(ims4[l]);
 	double f_= pow(10,(29-(m_+48.6)/2.5)); //uJ ;
 	f.push_back(f_);	
+  // debug, show magnitude and particle id every 100 particles
+  if(l > 0 || l==totPartxy4-1){
+  	cout << "particle id: " << l << " ||  apparent magnitude in " << nfilter[N] << " filter: " << m_ << endl;
+    }  
       }
       flux.push_back(f);
 
