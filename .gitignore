@@ -1,0 +1,5 @@
+*pdf
+.DS_Store
+docs/_build/
+docs/_doxygen/
+*.dSYM/

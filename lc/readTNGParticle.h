@@ -2,6 +2,10 @@
  * @file src/ReadTNGPartcle.h
  * @date 25/09/20
  * @author Erik Romelli - INAF-OATs
+ * Updates by Pablo M. Sanchez Alarcon - NASA Ames: 
+ *  - 8/09/26: 
+ *      Make RAM aware, add memory ceiling option, 
+ *      optimize single threaded, and improve error handling.
  */
 
 #include <vector>
@@ -193,9 +197,6 @@ private:
   // SnapByType -> Gas (0)
   std::vector<int> gasByType;
 
-  // Coordinates
-  Eigen::MatrixXd coordinates;
-
   // SubhaloLenType
   Eigen::MatrixXd subhaloLenType;
 
@@ -207,9 +208,6 @@ private:
 
   // snap gas
   H5::Group snapGAS;
-
-  // GAS Coordinates
-  Eigen::MatrixXd coordinates_gas;
 
   // GAS Coordinates -> X
   std::vector<double> x_gas;

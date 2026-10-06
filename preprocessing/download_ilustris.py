@@ -1,468 +1,1305 @@
-import requests
-import os
-import sys
-import argparse
-from pathlib import Path
+#!/usr/bin/env python3
+"""
+Download TNG Snapshot Data
 
-class TNGDownloader:
+This script downloads IllustrisTNG snapshot data:
+1. Group catalogs (subhalo information)
+2. Offsets files (particle-subhalo mapping)
+3. Snapshot chunks (particle data)
+
+No extraction or processing is performed - this just downloads the raw data.
+
+Usage:
+    # Download all files for snapshot 99
+    python process_tng_snapshot.py --api-key YOUR_KEY --snapshot-num 99 --simulation TNG300-3
+    
+    # Test with first chunk only
+    python process_tng_snapshot.py --api-key YOUR_KEY --snapshot-num 99 --simulation TNG300-3 --test
+"""
+
+import os
+
+import os
+
+import requests
+import h5py
+import numpy as np
+from pathlib import Path
+from tqdm import tqdm
+import argparse
+import sys
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+
+class TNGSnapshotProcessor:
     """
-    Download TNG/Illustris snapshots with specific fields for FORECAST lightcone code.
-    Only downloads gas (PartType0) and star (PartType4) particles with subhalo IDs.
+    Processes TNG snapshots: downloads and extracts to FORECAST format one chunk at a time.
     """
     
-    def __init__(self, api_key, simulation='TNG100-1', output_dir='./TNG100'):
+    def __init__(self, api_key, snapshot_num, output_dir, simulation='TNG300-3', temp_dir='TNG100_temp'):
         """
-        Initialize the TNG downloader.
+        Initialize processor.
         
         Parameters:
         -----------
         api_key : str
-            Your IllustrisTNG API key
-        simulation : str
-            Simulation name (e.g., 'TNG100-1', 'TNG100-3', 'TNG50-1')
+            TNG API key
+        snapshot_num : int
+            Snapshot number to process
         output_dir : str
-            Directory where snapshots will be saved
+            Directory for final FORECAST format files
+        simulation : str
+            Simulation name (default: TNG300-3)
+        temp_dir : str
+            Temporary directory for downloads (will be cleaned up)
         """
         self.api_key = api_key
+        self.snapshot_num = snapshot_num
         self.simulation = simulation
-        self.output_dir = Path(output_dir)
         self.base_url = 'https://www.tng-project.org/api'
-        self.headers = {'api-key': api_key}
         
-        # Create output directory
+        # Setup directories
+        self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
         
-        print(f"Initialized TNG Downloader")
-        print(f"Simulation: {simulation}")
-        print(f"Output directory: {output_dir}")
-    
-    def get_snapshot_number_from_redshift(self, target_redshift):
-        """
-        Find the snapshot number closest to the target redshift.
+        self.temp_dir = Path(temp_dir)
+        self.groupcat_dir = self.temp_dir / f'groups_{snapshot_num:03d}'
+        self.offsets_dir = self.temp_dir / f'offsets_{snapshot_num:03d}'
+        self.snapshot_dir = self.temp_dir / f'snapdir_{snapshot_num:03d}'
         
-        Parameters:
-        -----------
-        target_redshift : float
-            Target redshift
-            
-        Returns:
-        --------
-        int : Snapshot number
-        """
-        url = f"{self.base_url}/{self.simulation}/snapshots/"
-        response = requests.get(url, headers=self.headers)
+        # FORECAST required fields
+        self.gas_fields = ['Coordinates', 'Masses', 'Velocities', 'ParticleIDs']
+        self.star_fields = ['Coordinates', 'Masses', 'Velocities', 'GFM_StellarFormationTime', 'ParticleIDs']
         
-        if response.status_code != 200:
-            print(f"Error: Could not retrieve snapshot list. Status code: {response.status_code}")
-            return None
-        
-        # TNG API returns a list directly or a dict with 'results'
-        data = response.json()
-        snapshots = data if isinstance(data, list) else data.get('results', [])
-        
-        # Find closest snapshot to target redshift
-        min_diff = float('inf')
-        best_snap = None
-        
-        for snap in snapshots:
-            redshift = snap['redshift']
-            diff = abs(redshift - target_redshift)
-            if diff < min_diff:
-                min_diff = diff
-                best_snap = snap['number']
-                best_z = redshift
-        
-        print(f"\nTarget redshift: {target_redshift}")
-        print(f"Closest snapshot: {best_snap} (z = {best_z:.4f})")
-        
-        return best_snap
-    
-    def download_snapshot_file(self, snapshot_num, file_num=0, test_mode=False):
-        """
-        Download a single snapshot file.
-        
-        Parameters:
-        -----------
-        snapshot_num : int
-            Snapshot number (e.g., 99 for z=0)
-        file_num : int
-            File number within the snapshot (default: 0)
-        test_mode : bool
-            If True, only download first file for testing
-            
-        Returns:
-        --------
-        str : Path to downloaded file
-        """
-        
-        # Create snapshot directory
-        snap_dir = self.output_dir / f"snapdir_{snapshot_num:03d}"
-        snap_dir.mkdir(parents=True, exist_ok=True)
-        
-        output_file = snap_dir / f"snap_{snapshot_num:03d}.{file_num}.hdf5"
-        
-        # Check if file already exists
-        if output_file.exists():
-            file_size = output_file.stat().st_size
-            # If file is less than 1MB, it's probably an error message, re-download
-            if file_size > 1024 * 1024:
-                print(f"File already exists: {output_file} ({file_size / (1024**3):.2f} GB)")
-                return str(output_file)
-            else:
-                print(f"File exists but is too small ({file_size} bytes), re-downloading...")
-                output_file.unlink()
-        
-        return self._download_file_from_api(
-            snapshot_num, file_num, output_file, 
-            file_type='snapshot', test_mode=test_mode
-        )
-    
-    def download_groupcat_file(self, snapshot_num, file_num=0, test_mode=False):
-        """
-        Download a single group catalog file (contains subhalo membership).
-        
-        Parameters:
-        -----------
-        snapshot_num : int
-            Snapshot number (e.g., 99 for z=0)
-        file_num : int
-            File number within the group catalog (default: 0)
-        test_mode : bool
-            If True, only download first file for testing
-            
-        Returns:
-        --------
-        str : Path to downloaded file
-        """
-        
-        # Create groups directory
-        groups_dir = self.output_dir / f"groups_{snapshot_num:03d}"
-        groups_dir.mkdir(parents=True, exist_ok=True)
-        
-        output_file = groups_dir / f"fof_subhalo_tab_{snapshot_num:03d}.{file_num}.hdf5"
-        
-        # Check if file already exists
-        if output_file.exists():
-            file_size = output_file.stat().st_size
-            if file_size > 1024 * 1024:
-                print(f"File already exists: {output_file} ({file_size / (1024**3):.2f} GB)")
-                return str(output_file)
-            else:
-                print(f"File exists but is too small ({file_size} bytes), re-downloading...")
-                output_file.unlink()
-        
-        return self._download_file_from_api(
-            snapshot_num, file_num, output_file,
-            file_type='groupcat', test_mode=test_mode
-        )
-    
-    def _download_file_from_api(self, snapshot_num, file_num, output_file, file_type='snapshot', test_mode=False):
-        """
-        Internal method to download a file from TNG API.
-        
-        Parameters:
-        -----------
-        snapshot_num : int
-            Snapshot number
-        file_num : int
-            File number
-        output_file : Path
-            Output file path
-        file_type : str
-            'snapshot' or 'groupcat'
-        test_mode : bool
-            Test mode flag
-        """
-        print(f"Note: Downloading full snapshot file (includes all particle types)")
-        print(f"Filter to Gas and Stars during processing with C++ code.")
-        
-        
-        file_type_name = "snapshot" if file_type == 'snapshot' else "group catalog"
-        print(f"\nDownloading {file_type_name} {snapshot_num}, file {file_num}...")
-        
-        if file_type == 'groupcat':
-            print(f"Note: Group catalogs contain subhalo membership information")
-        else:
-            print(f"Note: Downloading full snapshot file (includes all particle types)")
-            print(f"Filter to Gas and Stars during processing with C++ code.")
-        
-        # Get the actual download URL from TNG API
-        # First, get the file list to find the correct file URL
-        if file_type == 'snapshot':
-            files_url = f"{self.base_url}/{self.simulation}/files/snapshot-{snapshot_num}/"
-            target_filename = f"snapshot-{snapshot_num}.{file_num}.hdf5"
-        else:  # groupcat
-            files_url = f"{self.base_url}/{self.simulation}/files/groupcat-{snapshot_num}/"
-            target_filename = f"groupcat-{snapshot_num}.{file_num}.hdf5"
-        
-        print(f"Querying file list: {files_url}")
-        files_response = requests.get(files_url, headers=self.headers)
-        
-        if files_response.status_code != 200:
-            print(f"Error: Could not get file list. Status code: {files_response.status_code}")
-            print(f"Response: {files_response.text[:500]}")
-            return None
-        
-        files_data = files_response.json()
-        
-        # Find the specific file we want
-        # target_filename set above based on file_type
-        file_url = None
-        
-        # API returns: {'files': ['http://...', 'http://...', ...]}
-        if isinstance(files_data, dict) and 'files' in files_data:
-            files_list = files_data['files']
-        elif isinstance(files_data, list):
-            files_list = files_data
-        else:
-            print(f"Unexpected API response format: {type(files_data)}")
-            print(f"Keys: {files_data.keys() if isinstance(files_data, dict) else 'N/A'}")
-            return None
-        
-        # Find the file URL that matches our target
-        for file_path in files_list:
-            if target_filename in file_path:
-                file_url = file_path
-                break
-        
-        if not file_url:
-            print(f"Error: Could not find file {target_filename} in snapshot {snapshot_num}")
-            print(f"Available files (first 3): {files_list[:3]}")
-            return None
-        
-        print(f"File URL: {file_url}")
-        
-        # Make the request with allow_redirects to follow the download link
-        response = requests.get(file_url, headers=self.headers, stream=True, allow_redirects=True)
-        
-        if response.status_code != 200:
-            print(f"Error downloading file. Status code: {response.status_code}")
-            print(f"Response: {response.text[:500]}")
-            return None
-        
-        # Get file size
-        total_size = int(response.headers.get('content-length', 0))
-        total_size_gb = total_size / (1024**3)
-        print(f"Download size: {total_size_gb:.2f} GB ({total_size / (1024**2):.0f} MB)")
-        
-        if test_mode and total_size > 100 * 1024 * 1024:  # If test mode and > 100 MB
-            print(f"\n⚠ TEST MODE: File is {total_size_gb:.2f} GB")
-            print(f"This is a full snapshot download and will take time.")
-            print(f"File will be downloaded to: {output_file}")
-        
-        # Download with progress bar
-        downloaded = 0
-        chunk_size = 1024 * 1024  # 1 MB chunks for faster download
-        with open(output_file, 'wb') as f:
-            for chunk in response.iter_content(chunk_size=chunk_size):
-                if chunk:
-                    f.write(chunk)
-                    downloaded += len(chunk)
-                    progress = (downloaded / total_size) * 100 if total_size > 0 else 0
-                    downloaded_mb = downloaded / (1024**2)
-                    total_mb = total_size / (1024**2)
-                    print(f"\rProgress: {progress:.1f}% ({downloaded_mb:.1f}/{total_mb:.0f} MB)", end='', flush=True)
-        
-        print(f"\n✓ Downloaded: {output_file}")
-        
-        if test_mode:
-            print("\n** TEST MODE: Only downloaded one file **")
-        
-        return str(output_file)
-    
-    def download_full_snapshot(self, snapshot_num, test_mode=False, download_groupcat=True):
-        """
-        Download all files for a snapshot and optionally group catalogs.
-        
-        Parameters:
-        -----------
-        snapshot_num : int
-            Snapshot number
-        test_mode : bool
-            If True, only download first file
-        download_groupcat : bool
-            If True, also download group catalog files (contains subhalo IDs)
-            
-        Returns:
-        --------
-        dict : Dictionary with 'snapshots' and 'groupcats' file lists
-        """
-        
-        # Get number of files in snapshot
-        url = f"{self.base_url}/{self.simulation}/snapshots/{snapshot_num}/"
-        response = requests.get(url, headers=self.headers)
-        
-        if response.status_code != 200:
-            print(f"Error: Could not retrieve snapshot info. Status code: {response.status_code}")
-            return None
-        
-        snapshot_info = response.json()
-        num_files = snapshot_info.get('num_files', 1)
-        
-        print(f"\nSnapshot {snapshot_num} has {num_files} snapshot files")
-        
-        if test_mode:
-            print("TEST MODE: Downloading only first file of each type")
-            num_files = 1
-        
-        # Download snapshot files
-        print(f"\n{'='*60}")
-        print(f"DOWNLOADING SNAPSHOT FILES")
-        print(f"{'='*60}")
-        downloaded_snapshots = []
-        for file_num in range(num_files):
-            filepath = self.download_snapshot_file(snapshot_num, file_num, test_mode=test_mode)
-            if filepath:
-                downloaded_snapshots.append(filepath)
-        
-        print(f"\n✓ Successfully downloaded {len(downloaded_snapshots)} snapshot file(s)")
-        
-        # Download group catalog files (contains subhalo membership)
-        downloaded_groupcats = []
-        if download_groupcat:
-            print(f"\n{'='*60}")
-            print(f"DOWNLOADING GROUP CATALOG FILES (SUBHALO INFO)")
-            print(f"{'='*60}")
-            
-            # Get number of group catalog files
-            groupcat_url = f"{self.base_url}/{self.simulation}/files/groupcat-{snapshot_num}/"
-            groupcat_response = requests.get(groupcat_url, headers=self.headers)
-            
-            if groupcat_response.status_code == 200:
-                groupcat_data = groupcat_response.json()
-                if isinstance(groupcat_data, dict) and 'files' in groupcat_data:
-                    num_groupcat_files = len(groupcat_data['files'])
-                    print(f"Snapshot {snapshot_num} has {num_groupcat_files} group catalog files")
-                    
-                    if test_mode:
-                        num_groupcat_files = 1
-                    
-                    for file_num in range(num_groupcat_files):
-                        filepath = self.download_groupcat_file(snapshot_num, file_num, test_mode=test_mode)
-                        if filepath:
-                            downloaded_groupcats.append(filepath)
-                    
-                    print(f"\n✓ Successfully downloaded {len(downloaded_groupcats)} group catalog file(s)")
-                else:
-                    print(f"Warning: Could not determine number of group catalog files")
-            else:
-                print(f"Warning: Could not retrieve group catalog info (status {groupcat_response.status_code})")
-                print(f"Snapshot files downloaded, but no group catalogs.")
-        
-        return {
-            'snapshots': downloaded_snapshots,
-            'groupcats': downloaded_groupcats
+        # Statistics
+        self.stats = {
+            'chunks_processed': 0,
+            'chunks_failed': 0,
+            'total_gas_particles': 0,
+            'total_star_particles': 0,
+            'gas_in_subhalos': 0,
+            'stars_in_subhalos': 0
         }
     
-    def download_by_redshift(self, redshift, test_mode=False):
+    def _make_request(self, endpoint):
+        """Make API request with authentication."""
+        headers = {'api-key': self.api_key}
+        url = f"{self.base_url}/{endpoint}"
+        
+        response = requests.get(url, headers=headers)
+        if response.status_code != 200:
+            raise Exception(f"API request failed: {response.status_code} - {response.text}")
+        
+        return response.json()
+    
+    def _download_file(self, url, output_path, desc="Downloading", max_retries=5, timeout=500):
+        """Download file with progress bar and retry logic."""
+        headers = {'api-key': self.api_key}
+        
+        # Check if file exists and verify its size
+        if output_path.exists():
+            try:
+                # Get remote file size
+                response = requests.head(url, headers=headers, timeout=30)
+                remote_size = int(response.headers.get('content-length', 0))
+                local_size = output_path.stat().st_size
+                
+                # If sizes match, skip download
+                if remote_size > 0 and local_size > 0.99*remote_size and local_size < 1.01*remote_size:
+                    print(f"  ✓ Already exists (verified {local_size:,} bytes): {output_path.name}")
+                    return True
+                else:
+                    # Size mismatch - incomplete download, remove and re-download
+                    print(f"  ⚠ Incomplete file detected: {output_path.name} ({local_size:,}/{remote_size:,} bytes)")
+                    output_path.unlink()
+                    print(f"  ↻ Removed incomplete file, will re-download...")
+            except Exception as e:
+                # If we can't verify, try to remove and re-download
+                print(f"  ⚠ Could not verify file size: {e}")
+                print(f"  ↻ Will re-download to be safe...")
+                try:
+                    output_path.unlink()
+                except:
+                    pass
+        
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        for attempt in range(max_retries):
+            try:
+                response = requests.get(url, headers=headers, stream=True, timeout=timeout)
+                response.raise_for_status()
+                
+                total_size = int(response.headers.get('content-length', 0))
+                
+                with open(output_path, 'wb') as f, tqdm(
+                    total=total_size,
+                    unit='B',
+                    unit_scale=True,
+                    desc=f"  {desc}",
+                    leave=False
+                ) as pbar:
+                    for chunk in response.iter_content(chunk_size=8192):
+                        if chunk:
+                            f.write(chunk)
+                            pbar.update(len(chunk))
+                
+                return True
+                
+            except Exception as e:
+                if output_path.exists():
+                    output_path.unlink()
+                
+                if attempt < max_retries - 1:
+                    wait_time = (attempt + 1) * 5  # 5, 10, 15 seconds
+                    print(f"  ⚠ Download failed (attempt {attempt + 1}/{max_retries}): {e}")
+                    print(f"    Retrying in {wait_time} seconds...")
+                    time.sleep(wait_time)
+                else:
+                    print(f"  ✗ Download failed after {max_retries} attempts: {e}")
+                    return False
+        
+        return False
+    
+    def download_group_catalogs(self):
         """
-        Download snapshot closest to given redshift.
+        Download all group catalog files for the snapshot.
+        
+        Returns:
+        --------
+        list : List of downloaded group catalog file paths
+        """
+        print(f"\n{'='*60}")
+        print(f"STEP 1: DOWNLOADING GROUP CATALOGS")
+        print(f"Snapshot: {self.snapshot_num}")
+        print(f"{'='*60}\n")
+        
+        # Get list of group catalog files from API
+        endpoint = f"{self.simulation}/files/groupcat-{self.snapshot_num}/"
+        print(f"Querying: {endpoint}")
+        
+        try:
+            response = self._make_request(endpoint)
+            
+            if 'files' in response:
+                file_urls = response['files']
+            elif isinstance(response, list):
+                file_urls = response
+            else:
+                print(f"Unexpected API response format: {response}")
+                return []
+            
+            print(f"Found {len(file_urls)} group catalog files\n")
+            
+            # Check which files already exist
+            existing_files = set()
+            if self.groupcat_dir.exists():
+                existing_files = {f.name for f in self.groupcat_dir.glob('*.hdf5')}
+                if len(existing_files) > 0:
+                    print(f"Found {len(existing_files)} existing files")
+            
+            # Determine which files need to be downloaded
+            files_to_download = []
+            expected_filenames = set()
+            
+            for file_url in file_urls:
+                filename = file_url.split('/')[-1]
+                expected_filenames.add(filename)
+                if filename not in existing_files:
+                    files_to_download.append((file_url, filename))
+            
+            # Check if we have all expected files
+            if len(existing_files) == len(expected_filenames) and existing_files == expected_filenames:
+                print(f"✓ All {len(expected_filenames)} group catalog files already downloaded")
+                return sorted(self.groupcat_dir.glob('*.hdf5'))
+            
+            # Download missing files
+            if len(files_to_download) > 0:
+                print(f"Downloading {len(files_to_download)} missing files...\n")
+                
+                failed_downloads = []
+                for file_url, filename in tqdm(files_to_download, desc="Downloading group catalogs"):
+                    output_path = self.groupcat_dir / filename
+                    
+                    if not self._download_file(file_url, output_path, filename):
+                        failed_downloads.append(filename)
+                
+                if len(failed_downloads) > 0:
+                    print(f"\n⚠ Warning: {len(failed_downloads)} files failed to download:")
+                    for fname in failed_downloads[:5]:  # Show first 5
+                        print(f"  - {fname}")
+                    if len(failed_downloads) > 5:
+                        print(f"  ... and {len(failed_downloads) - 5} more")
+            
+            # Return all successfully downloaded files
+            downloaded_files = sorted(self.groupcat_dir.glob('*.hdf5'))
+            print(f"\n✓ Have {len(downloaded_files)} of {len(expected_filenames)} group catalog files")
+            
+            if len(downloaded_files) < len(expected_filenames):
+                print(f"⚠ Warning: Missing {len(expected_filenames) - len(downloaded_files)} files")
+                print(f"  Subhalo assignment may be incomplete")
+            
+            return downloaded_files
+            
+        except Exception as e:
+            print(f"✗ Failed to download group catalogs: {e}")
+            return []
+    
+    def download_offsets_files(self):
+        """
+        Download all offsets files for the snapshot.
+        
+        Returns:
+        --------
+        list : List of downloaded offsets file paths
+        """
+        print(f"\n{'='*60}")
+        print(f"STEP 2: DOWNLOADING OFFSETS FILES")
+        print(f"Snapshot: {self.snapshot_num}")
+        print(f"{'='*60}\n")
+        
+        # Get list of offsets files from API
+        endpoint = f"{self.simulation}/files/offsets-{self.snapshot_num}/"
+        print(f"Querying: {endpoint}")
+        
+        try:
+            response = self._make_request(endpoint)
+            
+            if 'files' in response:
+                file_urls = response['files']
+            elif isinstance(response, list):
+                file_urls = response
+            else:
+                print(f"Unexpected API response format: {response}")
+                return []
+            
+            print(f"Found {len(file_urls)} offsets files\n")
+            
+            # Check which files already exist
+            existing_files = set()
+            if self.offsets_dir.exists():
+                existing_files = {f.name for f in self.offsets_dir.glob('*.hdf5')}
+                if len(existing_files) > 0:
+                    print(f"Found {len(existing_files)} existing files")
+            
+            # Determine which files need to be downloaded
+            files_to_download = []
+            expected_filenames = set()
+            
+            for file_url in file_urls:
+                filename = file_url.split('/')[-1]
+                expected_filenames.add(filename)
+                if filename not in existing_files:
+                    files_to_download.append((file_url, filename))
+            
+            # Check if we have all expected files
+            if len(existing_files) == len(expected_filenames) and existing_files == expected_filenames:
+                print(f"✓ All {len(expected_filenames)} offsets files already downloaded")
+                return sorted(self.offsets_dir.glob('*.hdf5'))
+            
+            # Download missing files
+            if len(files_to_download) > 0:
+                print(f"Downloading {len(files_to_download)} missing files...\n")
+                
+                failed_downloads = []
+                for file_url, filename in tqdm(files_to_download, desc="Downloading offsets files"):
+                    output_path = self.offsets_dir / filename
+                    
+                    if not self._download_file(file_url, output_path, filename):
+                        failed_downloads.append(filename)
+                
+                if len(failed_downloads) > 0:
+                    print(f"\n⚠ Warning: {len(failed_downloads)} files failed to download:")
+                    for fname in failed_downloads[:5]:  # Show first 5
+                        print(f"  - {fname}")
+                    if len(failed_downloads) > 5:
+                        print(f"  ... and {len(failed_downloads) - 5} more")
+            
+            # Return all successfully downloaded files
+            downloaded_files = sorted(self.offsets_dir.glob('*.hdf5'))
+            print(f"\n✓ Have {len(downloaded_files)} of {len(expected_filenames)} offsets files")
+            
+            if len(downloaded_files) < len(expected_filenames):
+                print(f"⚠ Warning: Missing {len(expected_filenames) - len(downloaded_files)} files")
+                print(f"  Subhalo assignment may be incomplete")
+            
+            return downloaded_files
+            
+        except Exception as e:
+            print(f"✗ Failed to download offsets files: {e}")
+            print(f"  Note: Not all simulations provide offsets files")
+            return []
+    
+    def build_subhalo_membership_map_from_offsets(self, offsets_files, groupcat_files):
+        """
+        Build subhalo membership map using offsets files.
+        
+        The TNG offsets files contain information about where particles for each
+        subhalo are located in the snapshot files. The format is:
+        - Subhalo/SnapByType[subhalo_id, part_type] = starting GLOBAL offset in snapshot
+        - Group catalog SubhaloLenType[subhalo_id, part_type] = number of particles
+        
+        This builds a global mapping that will be converted to chunk-local indices
+        during extraction.
         
         Parameters:
         -----------
-        redshift : float
-            Target redshift
-        test_mode : bool
-            If True, only download first file
+        offsets_files : list
+            List of offsets file paths
+        groupcat_files : list
+            List of group catalog file paths
             
         Returns:
         --------
-        list : Paths to downloaded files
+        dict : {'offsets': {particle_type: {global_index: subhalo_id}}, 
+                'num_chunks': int}
         """
-        snapshot_num = self.get_snapshot_number_from_redshift(redshift)
-        if snapshot_num is None:
-            return None
+        print(f"\n{'='*60}")
+        print(f"BUILDING SUBHALO MEMBERSHIP MAP FROM OFFSETS")
+        print(f"{'='*60}\n")
         
-        return self.download_full_snapshot(snapshot_num, test_mode=test_mode)
+        if len(offsets_files) == 0:
+            print("✗ No offsets files available!")
+            return {}
+        
+        print("Reading offsets and group catalogs...")
+        
+        # Load offsets file (usually just one file for the entire snapshot)
+        offsets_path = offsets_files[0]
+        
+        with h5py.File(offsets_path, 'r') as of:
+            if 'Subhalo' not in of or 'SnapByType' not in of['Subhalo']:
+                print("✗ Offsets file missing Subhalo/SnapByType dataset!")
+                return {}
+            
+            # Shape: (n_subhalos, 6) - GLOBAL offsets for each subhalo and particle type
+            subhalo_offsets = of['Subhalo/SnapByType'][:]
+            n_subhalos = len(subhalo_offsets)
+            print(f"  Found offsets for {n_subhalos:,} subhalos")
+        
+        # Load subhalo lengths from group catalogs
+        print("  Reading subhalo lengths...")
+        all_subhalo_lengths = []
+        
+        for groupcat_path in groupcat_files:
+            with h5py.File(groupcat_path, 'r') as gf:
+                if 'Subhalo' in gf and 'SubhaloLenType' in gf['Subhalo']:
+                    subhalo_lens = gf['Subhalo/SubhaloLenType'][:]
+                    all_subhalo_lengths.append(subhalo_lens)
+        
+        if len(all_subhalo_lengths) == 0:
+            print("✗ No subhalo lengths found in group catalogs!")
+            return {}
+        
+        # Concatenate all subhalo lengths
+        subhalo_lengths = np.vstack(all_subhalo_lengths)
+        print(f"  Loaded lengths for {len(subhalo_lengths):,} subhalos")
+        
+        # Build mapping: global_particle_index -> subhalo_id
+        # These are GLOBAL indices across the entire simulation
+        particle_to_subhalo = {0: {}, 4: {}}  # Gas and Stars
+        
+        print("  Building global particle->subhalo mapping...")
+        for subhalo_id in tqdm(range(min(n_subhalos, len(subhalo_lengths))), desc="Processing subhalos"):
+            for part_type in [0, 4]:  # Gas and Stars
+                offset = subhalo_offsets[subhalo_id, part_type]
+                length = subhalo_lengths[subhalo_id, part_type]
+                
+                if length > 0:
+                    # Map GLOBAL particle indices to this subhalo
+                    for particle_idx in range(offset, offset + length):
+                        particle_to_subhalo[part_type][particle_idx] = subhalo_id
+        
+        total_gas = len(particle_to_subhalo[0])
+        total_stars = len(particle_to_subhalo[4])
+        
+        print(f"\nGlobal offset-based mapping built:")
+        print(f"  Gas particles mapped: {total_gas:,}")
+        print(f"  Star particles mapped: {total_stars:,}")
+        print(f"\n  Note: These are GLOBAL indices across all chunks")
+        print(f"        Will be converted to chunk-local indices during extraction")
+        
+        return {
+            'type': 'offsets',
+            'offsets': particle_to_subhalo
+        }
     
-    def download_multiple_redshifts(self, redshift_list, test_mode=False):
+    def build_subhalo_membership_map(self, groupcat_files):
         """
-        Download multiple snapshots for a list of redshifts.
+        Build global subhalo membership map from group catalogs.
         
         Parameters:
         -----------
-        redshift_list : list
-            List of redshifts
-        test_mode : bool
-            If True, only download first file of each snapshot
+        groupcat_files : list
+            List of group catalog file paths
+            
+        Returns:
+        --------
+        dict : {particle_type: {particle_id: subhalo_id}}
         """
-        print(f"\nDownloading {len(redshift_list)} snapshots...")
+        print(f"\n{'='*60}")
+        print(f"BUILDING SUBHALO MEMBERSHIP MAP")
+        print(f"{'='*60}\n")
         
-        for i, z in enumerate(redshift_list, 1):
-            print(f"\n{'='*60}")
-            print(f"Downloading snapshot {i}/{len(redshift_list)} at z={z}")
-            print(f"{'='*60}")
-            self.download_by_redshift(z, test_mode=test_mode)
+        membership_maps = {0: {}, 4: {}}  # Gas and Stars
+        
+        for file_path in tqdm(groupcat_files, desc="Processing group catalogs"):
+            with h5py.File(file_path, 'r') as f:
+                
+                if 'Subhalo' not in f or 'SubhaloLenType' not in f['Subhalo']:
+                    continue
+                
+                subhalo_len_type = f['Subhalo/SubhaloLenType'][:]
+                n_subhalos = len(subhalo_len_type)
+                
+                if 'IDs' not in f:
+                    continue
+                
+                ids_group = f['IDs']
+                
+                for part_type in [0, 4]:  # Gas and Stars
+                    part_key = f'PartType{part_type}'
+                    
+                    if part_key in ids_group:
+                        particle_ids = ids_group[part_key][:]
+                        
+                        offset = 0
+                        for subhalo_id in range(n_subhalos):
+                            n_particles = subhalo_len_type[subhalo_id, part_type]
+                            
+                            if n_particles > 0:
+                                for i in range(offset, offset + n_particles):
+                                    if i < len(particle_ids):
+                                        pid = particle_ids[i]
+                                        membership_maps[part_type][pid] = subhalo_id
+                            
+                            offset += n_particles
+        
+        print(f"\nMembership map built:")
+        print(f"  Gas particles mapped: {len(membership_maps[0]):,}")
+        print(f"  Star particles mapped: {len(membership_maps[4]):,}")
+        
+        return membership_maps
+    
+    def download_snapshot_chunk(self, chunk_num):
+        """
+        Download a single snapshot chunk.
+        
+        Parameters:
+        -----------
+        chunk_num : int
+            Chunk number to download
+            
+        Returns:
+        --------
+        Path or None : Path to downloaded file, or None if failed
+        """
+        # Get list of snapshot files
+        endpoint = f"{self.simulation}/files/snapshot-{self.snapshot_num}/"
+        
+        try:
+            response = self._make_request(endpoint)
+            
+            if 'files' in response:
+                file_urls = response['files']
+            elif isinstance(response, list):
+                file_urls = response
+            else:
+                print(f"Unexpected API response: {response}")
+                return None
+            
+            # Find the specific chunk
+            # Try different filename formats (TNG100-1 uses snap_XXX, TNG300-3 uses snapshot-XXX)
+            possible_filenames = [
+                f"snap_{self.snapshot_num:03d}.{chunk_num}.hdf5",
+                f"snapshot-{self.snapshot_num}.{chunk_num}.hdf5"
+            ]
+            
+            chunk_url = None
+            chunk_filename = None
+            
+            for filename in possible_filenames:
+                for url in file_urls:
+                    if filename in url:
+                        chunk_url = url
+                        chunk_filename = filename
+                        break
+                if chunk_url:
+                    break
+            
+            if chunk_url is None:
+                print(f"  ✗ Chunk {chunk_num} not found in file list")
+                print(f"    Tried: {', '.join(possible_filenames)}")
+                return None
+            
+            # Download the chunk
+            output_path = self.snapshot_dir / chunk_filename
+            
+            if self._download_file(chunk_url, output_path, chunk_filename):
+                return output_path
+            else:
+                return None
+                
+        except Exception as e:
+            print(f"  ✗ Failed to download chunk {chunk_num}: {e}")
+            return None
+    
+    def get_chunk_offsets(self):
+        """
+        Get cumulative particle counts for each chunk to understand global offsets.
+        
+        Returns:
+        --------
+        dict : {particle_type: [cumulative counts per chunk]}
+        """
+        # Query for all chunk files
+        endpoint = f"{self.simulation}/files/snapshot-{self.snapshot_num}/"
+        
+        try:
+            response = self._make_request(endpoint)
+            file_urls = response.get('files', response if isinstance(response, list) else [])
+            
+            # Sort chunk URLs
+            patterns = [
+                f"snap_{self.snapshot_num:03d}.",
+                f"snapshot-{self.snapshot_num}."
+            ]
+            chunk_urls = []
+            for pattern in patterns:
+                urls = sorted([url for url in file_urls if pattern in url and url.endswith('.hdf5')])
+                if urls:
+                    chunk_urls = urls
+                    break
+            
+            # Read headers from each chunk
+            chunk_offsets = {0: [0], 4: [0]}  # Cumulative offsets
+            
+            for i, url in enumerate(chunk_urls):
+                # Download header only if needed, or use existing file
+                chunk_filename = url.split('/')[-1]
+                chunk_path = self.snapshot_dir / chunk_filename
+                
+                if chunk_path.exists():
+                    with h5py.File(chunk_path, 'r') as f:
+                        header = f['Header'].attrs
+                        for part_type in [0, 4]:
+                            n_part = header[f'NumPart_ThisFile'][part_type]
+                            chunk_offsets[part_type].append(chunk_offsets[part_type][-1] + n_part)
+            
+            return chunk_offsets
+            
+        except Exception as e:
+            print(f"Warning: Could not determine chunk offsets: {e}")
+            return {0: [0], 4: [0]}
+    
+    def extract_chunk_data(self, chunk_path, membership_maps, chunk_num, chunk_offsets=None):
+        """
+        Extract FORECAST-required fields from a single chunk.
+        
+        Parameters:
+        -----------
+        chunk_path : Path
+            Path to snapshot chunk file
+        membership_maps : dict
+            Either:
+            - {'type': 'offsets', 'offsets': {particle_type: {global_index: subhalo_id}}}
+            - {particle_type: {particle_id: subhalo_id}} (legacy particle ID method)
+        chunk_num : int
+            Chunk number being processed
+        chunk_offsets : dict, optional
+            {particle_type: [cumulative counts]} for global-to-local index conversion
+            
+        Returns:
+        --------
+        dict : Extracted data with subhalo IDs
+        """
+        data = {
+            0: {field: None for field in self.gas_fields + ['SubhaloID']},
+            4: {field: None for field in self.star_fields + ['SubhaloID']}
+        }
+        
+        # Detect mapping type
+        uses_offsets = isinstance(membership_maps, dict) and membership_maps.get('type') == 'offsets'
+        
+        with h5py.File(chunk_path, 'r') as f:
+            
+            # Process Gas particles (PartType0)
+            if 'PartType0' in f:
+                part_group = f['PartType0']
+                
+                if 'ParticleIDs' in part_group:
+                    pids = part_group['ParticleIDs'][:]
+                    n_particles = len(pids)
+                    
+                    # Determine subhalo IDs based on mapping type
+                    if uses_offsets and 'offsets' in membership_maps:
+                        # Use offset-based mapping (convert global to local indices)
+                        global_offsets = membership_maps['offsets']
+                        
+                        # Get global offset for this chunk
+                        if chunk_offsets and 0 in chunk_offsets and chunk_num < len(chunk_offsets[0]) - 1:
+                            chunk_start = chunk_offsets[0][chunk_num]
+                            subhalo_ids = np.full(n_particles, -1, dtype=np.int32)
+                            
+                            # Map each particle using global index
+                            for local_idx in range(n_particles):
+                                global_idx = chunk_start + local_idx
+                                if global_idx in global_offsets[0]:
+                                    subhalo_ids[local_idx] = global_offsets[0][global_idx]
+                        else:
+                            subhalo_ids = np.full(n_particles, -1, dtype=np.int32)
+                    
+                    elif not uses_offsets and 0 in membership_maps:
+                        # Use particle ID-based mapping
+                        subhalo_ids = np.array([membership_maps[0].get(pid, -1) for pid in pids], dtype=np.int32)
+                    else:
+                        # No mapping available
+                        subhalo_ids = np.full(n_particles, -1, dtype=np.int32)
+                    
+                    for field in self.gas_fields:
+                        if field in part_group:
+                            data[0][field] = part_group[field][:]
+                    
+                    data[0]['SubhaloID'] = subhalo_ids
+            
+            # Process Star particles (PartType4)
+            if 'PartType4' in f:
+                part_group = f['PartType4']
+                
+                if 'ParticleIDs' in part_group:
+                    pids = part_group['ParticleIDs'][:]
+                    n_particles = len(pids)
+                    
+                    # Determine subhalo IDs based on mapping type
+                    if uses_offsets and 'offsets' in membership_maps:
+                        # Use offset-based mapping (convert global to local indices)
+                        global_offsets = membership_maps['offsets']
+                        
+                        # Get global offset for this chunk
+                        if chunk_offsets and 4 in chunk_offsets and chunk_num < len(chunk_offsets[4]) - 1:
+                            chunk_start = chunk_offsets[4][chunk_num]
+                            subhalo_ids = np.full(n_particles, -1, dtype=np.int32)
+                            
+                            # Map each particle using global index
+                            for local_idx in range(n_particles):
+                                global_idx = chunk_start + local_idx
+                                if global_idx in global_offsets[4]:
+                                    subhalo_ids[local_idx] = global_offsets[4][global_idx]
+                        else:
+                            subhalo_ids = np.full(n_particles, -1, dtype=np.int32)
+                    
+                    elif not uses_offsets and 4 in membership_maps:
+                        # Use particle ID-based mapping
+                        subhalo_ids = np.array([membership_maps[4].get(pid, -1) for pid in pids], dtype=np.int32)
+                    else:
+                        # No mapping available
+                        subhalo_ids = np.full(n_particles, -1, dtype=np.int32)
+                    
+                    for field in self.star_fields:
+                        if field in part_group:
+                            data[4][field] = part_group[field][:]
+                    
+                    data[4]['SubhaloID'] = subhalo_ids
+        
+        return data
+    
+    def verify_subhalo_assignment(self, data, chunk_num):
+        """
+        Verify that subhalo IDs were assigned correctly.
+        
+        Parameters:
+        -----------
+        data : dict
+            Extracted particle data
+        chunk_num : int
+            Chunk number being processed
+            
+        Returns:
+        --------
+        bool : True if verification passed, False otherwise
+        """
+        print(f"    Verifying subhalo assignments...")
+        
+        verification_passed = True
+        
+        # Check Gas particles
+        if data[0]['SubhaloID'] is not None:
+            gas_subhalo_ids = data[0]['SubhaloID']
+            n_gas = len(gas_subhalo_ids)
+            n_gas_in_subhalos = np.sum(gas_subhalo_ids >= 0)
+            
+            self.stats['total_gas_particles'] += n_gas
+            self.stats['gas_in_subhalos'] += n_gas_in_subhalos
+            
+            print(f"      Gas: {n_gas:,} particles, {n_gas_in_subhalos:,} in subhalos ({100*n_gas_in_subhalos/n_gas:.1f}%)")
+        
+        # Check Star particles
+        if data[4]['SubhaloID'] is not None:
+            star_subhalo_ids = data[4]['SubhaloID']
+            n_stars = len(star_subhalo_ids)
+            n_stars_in_subhalos = np.sum(star_subhalo_ids >= 0)
+            
+            self.stats['total_star_particles'] += n_stars
+            self.stats['stars_in_subhalos'] += n_stars_in_subhalos
+            
+            print(f"      Stars: {n_stars:,} particles, {n_stars_in_subhalos:,} in subhalos ({100*n_stars_in_subhalos/n_stars:.1f}%)")
+        
+        # Verification checks
+        checks = []
+        
+        # Check 1: SubhaloID field exists
+        if data[0]['SubhaloID'] is not None or data[4]['SubhaloID'] is not None:
+            checks.append(("SubhaloID field exists", True))
+        else:
+            checks.append(("SubhaloID field exists", False))
+            verification_passed = False
+        
+        # Check 2: SubhaloID has correct dtype
+        if data[0]['SubhaloID'] is not None:
+            if data[0]['SubhaloID'].dtype == np.int32:
+                checks.append(("Gas SubhaloID dtype is int32", True))
+            else:
+                checks.append(("Gas SubhaloID dtype is int32", False))
+                verification_passed = False
+        
+        if data[4]['SubhaloID'] is not None:
+            if data[4]['SubhaloID'].dtype == np.int32:
+                checks.append(("Star SubhaloID dtype is int32", True))
+            else:
+                checks.append(("Star SubhaloID dtype is int32", False))
+                verification_passed = False
+        
+        # Check 3: SubhaloID matches ParticleIDs length
+        if data[0]['SubhaloID'] is not None and data[0]['ParticleIDs'] is not None:
+            if len(data[0]['SubhaloID']) == len(data[0]['ParticleIDs']):
+                checks.append(("Gas SubhaloID length matches ParticleIDs", True))
+            else:
+                checks.append(("Gas SubhaloID length matches ParticleIDs", False))
+                verification_passed = False
+        
+        if data[4]['SubhaloID'] is not None and data[4]['ParticleIDs'] is not None:
+            if len(data[4]['SubhaloID']) == len(data[4]['ParticleIDs']):
+                checks.append(("Star SubhaloID length matches ParticleIDs", True))
+            else:
+                checks.append(("Star SubhaloID length matches ParticleIDs", False))
+                verification_passed = False
+        
+        # Print verification summary
+        print(f"    Verification checks:")
+        for check_name, passed in checks:
+            status = "✓" if passed else "✗"
+            print(f"      {status} {check_name}")
+        
+        return verification_passed
+    
+    def write_forecast_file(self, data, chunk_num, chunk_path):
+        """
+        Write extracted data to FORECAST format HDF5 file.
+        
+        Parameters:
+        -----------
+        data : dict
+            Extracted particle data
+        chunk_num : int
+            Chunk number
+        chunk_path : Path
+            Original chunk path (for header)
+            
+        Returns:
+        --------
+        Path : Output file path
+        """
+        output_file = self.output_dir / f"forecast_snap_{self.snapshot_num:03d}.{chunk_num}.hdf5"
+        
+        with h5py.File(output_file, 'w') as out_f:
+            
+            # Copy header from original chunk
+            with h5py.File(chunk_path, 'r') as in_f:
+                if 'Header' in in_f:
+                    in_f.copy('Header', out_f)
+            
+            # Write Gas particles (PartType0)
+            if data[0]['ParticleIDs'] is not None and len(data[0]['ParticleIDs']) > 0:
+                gas_group = out_f.create_group('PartType0')
+                for field, arr in data[0].items():
+                    if arr is not None and len(arr) > 0:
+                        gas_group.create_dataset(field, data=arr, compression='gzip', compression_opts=4)
+            
+            # Write Star particles (PartType4)
+            if data[4]['ParticleIDs'] is not None and len(data[4]['ParticleIDs']) > 0:
+                star_group = out_f.create_group('PartType4')
+                for field, arr in data[4].items():
+                    if arr is not None and len(arr) > 0:
+                        star_group.create_dataset(field, data=arr, compression='gzip', compression_opts=4)
+            
+            # Add metadata
+            out_f.attrs['ExtractedForFORECAST'] = True
+            out_f.attrs['OriginalSnapshot'] = str(chunk_path)
+            out_f.attrs['SnapshotNumber'] = self.snapshot_num
+            out_f.attrs['ChunkNumber'] = chunk_num
+            out_f.attrs['ProcessedDate'] = time.strftime('%Y-%m-%d %H:%M:%S')
+        
+        # Get file size for reporting
+        file_size_mb = output_file.stat().st_size / (1024**2)
+        print(f"    Written: {output_file.name} ({file_size_mb:.1f} MB)")
+        
+        return output_file
+    
+    def process_chunk(self, chunk_num, membership_maps):
+        """
+        Process a single chunk: download, extract, verify, cleanup.
+        
+        Parameters:
+        -----------
+        chunk_num : int
+            Chunk number to process
+        membership_maps : dict
+            Global subhalo membership map
+            
+        Returns:
+        --------
+        bool : True if successful, False otherwise
+        """
+        print(f"\n  Chunk {chunk_num}:")
+        
+        try:
+            # Step 1: Download chunk
+            print(f"    Downloading chunk {chunk_num}...")
+            chunk_path = self.download_snapshot_chunk(chunk_num)
+            
+            if chunk_path is None:
+                print(f"    ✗ Download failed")
+                self.stats['chunks_failed'] += 1
+                return False
+            
+            original_size_mb = chunk_path.stat().st_size / (1024**2)
+            print(f"    Downloaded: {chunk_path.name} ({original_size_mb:.1f} MB)")
+            
+            # Step 2: Extract data
+            print(f"    Extracting FORECAST fields...")
+            data = self.extract_chunk_data(chunk_path, membership_maps, chunk_num)
+            
+            # Step 3: Verify subhalo assignment
+            verification_passed = self.verify_subhalo_assignment(data, chunk_num)
+            
+            if not verification_passed:
+                print(f"    ⚠ Verification warnings detected")
+            
+            # Step 4: Write output file
+            output_file = self.write_forecast_file(data, chunk_num, chunk_path)
+            output_size_mb = output_file.stat().st_size / (1024**2)
+            
+            compression_ratio = 100 * (1 - output_size_mb / original_size_mb)
+            print(f"    Size reduction: {original_size_mb:.1f} MB → {output_size_mb:.1f} MB ({compression_ratio:.1f}% saved)")
+            
+            # Step 5: Cleanup original chunk
+            print(f"    Removing original chunk...")
+            chunk_path.unlink()
+            
+            self.stats['chunks_processed'] += 1
+            print(f"    ✓ Chunk {chunk_num} completed")
+            
+            return True
+            
+        except Exception as e:
+            print(f"    ✗ Error processing chunk {chunk_num}: {e}")
+            self.stats['chunks_failed'] += 1
+            return False
+    
+    def get_total_chunks(self):
+        """
+        Query TNG API to get total number of chunks for the snapshot.
+        
+        Returns:
+        --------
+        int : Number of chunks
+        """
+        endpoint = f"{self.simulation}/files/snapshot-{self.snapshot_num}/"
+        
+        try:
+            response = self._make_request(endpoint)
+            
+            if 'files' in response:
+                file_urls = response['files']
+            elif isinstance(response, list):
+                file_urls = response
+            else:
+                return 0
+            
+            # Count snapshot chunks (handle both naming conventions)
+            # TNG100-1: snap_099.X.hdf5, TNG300-3: snapshot-99.X.hdf5
+            patterns = [
+                f"snap_{self.snapshot_num:03d}.",
+                f"snapshot-{self.snapshot_num}."
+            ]
+            
+            chunks = []
+            for pattern in patterns:
+                chunks.extend([url for url in file_urls if pattern in url and url.endswith('.hdf5')])
+            
+            return len(chunks)
+            
+        except Exception as e:
+            print(f"Error getting chunk count: {e}")
+            return 0
+    
+    def download_all_snapshot_chunks(self, test_mode=False):
+        """
+        Download all snapshot chunks.
+        
+        Parameters:
+        -----------
+        test_mode : bool
+            If True, only download first chunk
+            
+        Returns:
+        --------
+        list : List of downloaded chunk paths
+        """
+        print(f"\n{'='*60}")
+        print(f"STEP 3: DOWNLOADING SNAPSHOT CHUNKS")
+        print(f"Snapshot: {self.snapshot_num}")
+        print(f"{'='*60}\n")
+        
+        # Get total chunks
+        total_chunks = self.get_total_chunks()
+        
+        if total_chunks == 0:
+            print("✗ Could not determine number of chunks")
+            return []
+        
+        if test_mode:
+            chunks_to_download = [0]
+            print(f"Downloading 1 chunk (TEST MODE)\n")
+        else:
+            chunks_to_download = range(total_chunks)
+            print(f"Downloading {total_chunks} chunks\n")
+        
+        downloaded_chunks = []
+        failed_chunks = []
+        
+        for chunk_num in tqdm(chunks_to_download, desc="Downloading snapshot chunks"):
+            chunk_path = self.download_snapshot_chunk(chunk_num)
+            
+            if chunk_path:
+                downloaded_chunks.append(chunk_path)
+            else:
+                failed_chunks.append(chunk_num)
+        
+        print(f"\n✓ Downloaded {len(downloaded_chunks)} of {len(chunks_to_download)} chunks")
+        
+        if len(failed_chunks) > 0:
+            print(f"⚠ Warning: {len(failed_chunks)} chunks failed to download:")
+            for chunk_num in failed_chunks[:5]:
+                print(f"  - Chunk {chunk_num}")
+            if len(failed_chunks) > 5:
+                print(f"  ... and {len(failed_chunks) - 5} more")
+        
+        return downloaded_chunks
+    
+    def process(self, test_mode=False, max_retry_attempts=5):
+        """
+        Main download pipeline - downloads all required data without processing.
+        Includes retry logic with exponential backoff for network errors.
+        
+        Parameters:
+        -----------
+        test_mode : bool
+            If True, only download first chunk
+        max_retry_attempts : int
+            Maximum number of retry attempts for each download phase
+            
+        Returns:
+        --------
+        bool : True if successful, False otherwise
+        """
+        print(f"\n{'='*60}")
+        print(f"TNG DATA DOWNLOADER")
+        print(f"Simulation: {self.simulation}")
+        print(f"Snapshot: {self.snapshot_num}")
+        print(f"Mode: {'TEST (first chunk only)' if test_mode else 'FULL'}")
+        print(f"Max retry attempts: {max_retry_attempts}")
+        print(f"{'='*60}")
+        print(f"\nThis will download:")
+        print(f"  1. Group catalogs (for subhalo information)")
+        print(f"  2. Offsets files (for particle-subhalo matching)")
+        print(f"  3. Snapshot chunks (particle data)")
+        print(f"\nNo extraction or matching will be performed yet.\n")
+        
+        start_time = time.time()
+        
+        # Step 1: Download group catalogs with retry logic
+        print(f"\n{'='*60}")
+        print(f"STEP 1: DOWNLOADING GROUP CATALOGS")
+        print(f"{'='*60}\n")
+        
+        groupcat_files = []
+        for attempt in range(1, max_retry_attempts + 1):
+            try:
+                print(f"Attempt {attempt}/{max_retry_attempts}...")
+                groupcat_files = self.download_group_catalogs()
+                
+                if len(groupcat_files) > 0:
+                    print(f"✓ Group catalogs downloaded successfully")
+                    break
+                else:
+                    if attempt < max_retry_attempts:
+                        wait_time = min(60 * attempt, 300)  # Cap at 5 minutes
+                        print(f"⚠ No group catalogs downloaded. Retrying in {wait_time} seconds...")
+                        time.sleep(wait_time)
+                    
+            except (requests.ConnectionError, requests.Timeout, ConnectionResetError, BrokenPipeError) as e:
+                print(f"✗ Connection error: {type(e).__name__}")
+                if attempt < max_retry_attempts:
+                    wait_time = min(60 * attempt, 300)  # Exponential backoff, capped at 5 min
+                    print(f"⚠ Network disconnection detected. Retrying in {wait_time} seconds...")
+                    time.sleep(wait_time)
+                else:
+                    print(f"✗ Failed after {max_retry_attempts} attempts to download group catalogs")
+                    return False
+                    
+            except Exception as e:
+                print(f"✗ Error during group catalogs download: {e}")
+                if attempt < max_retry_attempts:
+                    wait_time = min(60 * attempt, 300)
+                    print(f"⚠ Retrying in {wait_time} seconds...")
+                    time.sleep(wait_time)
+                else:
+                    print(f"✗ Failed after {max_retry_attempts} attempts to download group catalogs")
+                    return False
+        
+        if len(groupcat_files) == 0:
+            print("\n✗ Failed to download group catalogs after all retry attempts. Aborting.")
+            return False
+        
+        # Step 2: Download offsets files with retry logic
+        print(f"\n{'='*60}")
+        print(f"STEP 2: DOWNLOADING OFFSETS FILES")
+        print(f"{'='*60}\n")
+        
+        offsets_files = []
+        for attempt in range(1, max_retry_attempts + 1):
+            try:
+                print(f"Attempt {attempt}/{max_retry_attempts}...")
+                offsets_files = self.download_offsets_files()
+                
+                if len(offsets_files) > 0:
+                    print(f"✓ Offsets files downloaded successfully")
+                    break
+                else:
+                    if attempt < max_retry_attempts:
+                        print(f"⚠ No offsets files downloaded. Retrying in 30 seconds...")
+                        time.sleep(30)
+                        
+            except (requests.ConnectionError, requests.Timeout, ConnectionResetError, BrokenPipeError) as e:
+                print(f"✗ Connection error: {type(e).__name__}")
+                if attempt < max_retry_attempts:
+                    wait_time = min(60 * attempt, 300)
+                    print(f"⚠ Network disconnection detected. Retrying in {wait_time} seconds...")
+                    time.sleep(wait_time)
+                else:
+                    print(f"⚠ Warning: Failed to download offsets files after {max_retry_attempts} attempts")
+                    print("  Subhalo matching may require alternative methods")
+                    
+            except Exception as e:
+                print(f"✗ Error during offsets download: {e}")
+                if attempt < max_retry_attempts:
+                    wait_time = min(60 * attempt, 300)
+                    print(f"⚠ Retrying in {wait_time} seconds...")
+                    time.sleep(wait_time)
+                else:
+                    print(f"⚠ Warning: Failed to download offsets files after {max_retry_attempts} attempts")
+                    print("  Subhalo matching may require alternative methods")
+        
+        if len(offsets_files) == 0:
+            print("\n⚠ Warning: No offsets files could be downloaded")
+            print("  Continuing with snapshot download - subhalo matching may require alternative methods")
+        
+        # Step 3: Download all snapshot chunks with retry logic
+        print(f"\n{'='*60}")
+        print(f"STEP 3: DOWNLOADING SNAPSHOT CHUNKS")
+        print(f"{'='*60}\n")
+        
+        snapshot_chunks = []
+        for attempt in range(1, max_retry_attempts + 1):
+            try:
+                print(f"Attempt {attempt}/{max_retry_attempts}...")
+                snapshot_chunks = self.download_all_snapshot_chunks(test_mode=test_mode)
+                
+                if len(snapshot_chunks) > 0:
+                    print(f"✓ Snapshot chunks downloaded successfully")
+                    break
+                else:
+                    if attempt < max_retry_attempts:
+                        wait_time = min(60 * attempt, 300)
+                        print(f"⚠ No snapshot chunks downloaded. Retrying in {wait_time} seconds...")
+                        time.sleep(wait_time)
+                    
+            except (requests.ConnectionError, requests.Timeout, ConnectionResetError, BrokenPipeError) as e:
+                print(f"✗ Connection error: {type(e).__name__}")
+                if attempt < max_retry_attempts:
+                    wait_time = min(60 * attempt, 300)
+                    print(f"⚠ Network disconnection detected. Retrying in {wait_time} seconds...")
+                    time.sleep(wait_time)
+                else:
+                    print(f"✗ Failed after {max_retry_attempts} attempts to download snapshot chunks")
+                    return False
+                    
+            except Exception as e:
+                print(f"✗ Error during snapshot download: {e}")
+                if attempt < max_retry_attempts:
+                    wait_time = min(60 * attempt, 300)
+                    print(f"⚠ Retrying in {wait_time} seconds...")
+                    time.sleep(wait_time)
+                else:
+                    print(f"✗ Failed after {max_retry_attempts} attempts to download snapshot chunks")
+                    return False
+        
+        if len(snapshot_chunks) == 0:
+            print("\n✗ Failed to download snapshot chunks after all retry attempts. Aborting.")
+            return False
+        
+        elapsed_time = time.time() - start_time
+        
+        # Print final summary
+        print(f"\n{'='*60}")
+        print(f"DOWNLOAD COMPLETE")
+        print(f"{'='*60}")
+        print(f"Time elapsed: {elapsed_time/60:.1f} minutes")
+        print(f"\nDownloaded files:")
+        print(f"  Group catalogs: {len(groupcat_files)} files")
+        print(f"  Offsets files: {len(offsets_files)} files")
+        print(f"  Snapshot chunks: {len(snapshot_chunks)} files")
+        print(f"\nData location:")
+        print(f"  Group catalogs: {self.groupcat_dir}")
+        print(f"  Offsets: {self.offsets_dir}")
+        print(f"  Snapshots: {self.snapshot_dir}")
+        print(f"\nNext steps:")
+        print(f"  - Use illustris_python to match particles to subhalos")
+        print(f"  - Extract FORECAST-required fields from snapshots")
+        print(f"  - Compress data to save space")
+        print(f"\n{'='*60}\n")
+        
+        return True
+
+
+def process_single_snapshot(simulation, snapshot_num, api_key, output_path):
+    """
+    Process a single snapshot.
+    
+    Parameters:
+    -----------
+    simulation : str
+        Simulation name
+    snapshot_num : int
+        Snapshot number
+    api_key : str
+        TNG API key
+    output_path : str
+        Output directory path
+        
+    Returns:
+    --------
+    tuple : (simulation, snapshot_num, success)
+    """
+    try:
+        processor = TNGSnapshotProcessor(
+            api_key=api_key,
+            snapshot_num=snapshot_num,
+            output_dir=output_path,
+            simulation=simulation,
+            temp_dir=output_path
+        )
+        
+        success = processor.process(test_mode=False)
+        return (simulation, snapshot_num, success)
+    
+    except Exception as e:
+        print(f"✗ Error processing {simulation} snapshot {snapshot_num}: {e}")
+        return (simulation, snapshot_num, False)
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description='Download TNG snapshots for FORECAST lightcone code'
-    )
+
+    # Original snapshot lists (can be adjusted as needed)
+    # snapshot_dict = {'TNG50-1': np.array([73, 76, 81, 85, 89, 93, 97]),
+    #                  'TNG50-2': np.array([60, 61, 62, 64, 65, 68, 69, 71]),
+    #                  'TNG100-1': np.array([26, 29, 32, 36, 39, 44, 47, 51, 54, 58])}
+
+    # Failed snapshot lists 
+
+    snapshot_dict = {'TNG50-2': np.array([98]),}
+
+    outputPath = "/Volumes/PMSAdrive/pmsa/storage/TNG/"
+    YOUR_KEY = "8a23973c71dfa5b08a074e900b1411ea"
     
-    parser.add_argument('--api-key', type=str, required=True,
-                       help='Your IllustrisTNG API key')
-    parser.add_argument('--simulation', type=str, default='TNG100-1',
-                       help='Simulation name (default: TNG100-1)')
-    parser.add_argument('--redshift', type=float, nargs='+',
-                       help='Redshift(s) to download (e.g., --redshift 0.0 1.0 2.0)')
-    parser.add_argument('--snapshot', type=int,
-                       help='Specific snapshot number to download')
-    parser.add_argument('--output-dir', type=str, default='./TNG100',
-                       help='Output directory (default: ./TNG100)')
-    parser.add_argument('--test', action='store_true',
-                       help='Test mode: only download first file of snapshot')
-    parser.add_argument('--no-groupcat', action='store_true',
-                       help='Skip downloading group catalog files (subhalo info)')
+    # Create list of all (simulation, snapshot_num) pairs to process
+    tasks = []
+    for simulation, snapshot_nums in snapshot_dict.items():
+        for snapshot_num in snapshot_nums:
+            tasks.append((simulation, int(snapshot_num), YOUR_KEY, os.path.join(outputPath, simulation)))
     
-    args = parser.parse_args()
+    total_tasks = len(tasks)
+    print(f"\n{'='*60}")
+    print(f"TNG DATA DOWNLOADER - PARALLEL MODE")
+    print(f"{'='*60}")
+    print(f"Total tasks: {total_tasks}")
+    print(f"Simulations: {list(snapshot_dict.keys())}")
+    print(f"Output directory: {outputPath}\n")
     
-    # Initialize downloader
-    downloader = TNGDownloader(
-        api_key=args.api_key,
-        simulation=args.simulation,
-        output_dir=args.output_dir
-    )
+    # Process snapshots in parallel using ThreadPoolExecutor
+    # Using max_workers to limit concurrent downloads (adjust based on network/CPU)
+    max_workers = 5  # Parallel downloads
     
-    download_groupcat = not args.no_groupcat
+    results = []
+    start_time = time.time()
     
-    # Download based on arguments
-    if args.snapshot is not None:
-        print(f"\nDownloading snapshot {args.snapshot}...")
-        downloader.download_full_snapshot(args.snapshot, test_mode=args.test, download_groupcat=download_groupcat)
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        # Submit all tasks
+        future_to_task = {
+            executor.submit(process_single_snapshot, sim, snap_num, api_key, out_path): 
+            (sim, snap_num) 
+            for sim, snap_num, api_key, out_path in tasks
+        }
+        
+        # Process completed tasks as they finish
+        completed = 0
+        for future in as_completed(future_to_task):
+            completed += 1
+            try:
+                simulation, snapshot_num, success = future.result()
+                results.append((simulation, snapshot_num, success))
+                status = "✓ SUCCESS" if success else "✗ FAILED"
+                print(f"\n[{completed}/{total_tasks}] {status}: {simulation} snapshot {snapshot_num}")
+            except Exception as e:
+                sim, snap_num = future_to_task[future]
+                print(f"\n[{completed}/{total_tasks}] ✗ EXCEPTION: {sim} snapshot {snap_num}: {e}")
+                results.append((sim, snap_num, False))
     
-    elif args.redshift:
-        if len(args.redshift) == 1:
-            print(f"\nDownloading snapshot at z={args.redshift[0]}...")
-            results = downloader.download_by_redshift(args.redshift[0], test_mode=args.test)
-        else:
-            print(f"\nDownloading {len(args.redshift)} snapshots...")
-            downloader.download_multiple_redshifts(args.redshift, test_mode=args.test)
+    elapsed_time = time.time() - start_time
     
-    else:
-        print("Error: Must specify either --redshift or --snapshot")
-        parser.print_help()
+    # Print summary
+    successful = sum(1 for _, _, success in results if success)
+    failed = total_tasks - successful
+    
+    print(f"\n{'='*60}")
+    print(f"PARALLEL PROCESSING COMPLETE")
+    print(f"{'='*60}")
+    print(f"Time elapsed: {elapsed_time/60:.1f} minutes")
+    print(f"\nResults:")
+    print(f"  Successful: {successful}/{total_tasks}")
+    print(f"  Failed: {failed}/{total_tasks}")
+    print(f"\nDetails:")
+    
+    for simulation, snapshot_num, success in sorted(results):
+        status = "✓" if success else "✗"
+        print(f"  {status} {simulation:12} snapshot {snapshot_num:2}")
+    
+    print(f"\n{'='*60}\n")
+    
+    # Exit with appropriate code
+    sys.exit(0 if failed == 0 else 1)
 
 
 if __name__ == "__main__":
-    
-    # Example usage within script (comment out main() above and uncomment below):
-    
-    # API_KEY = "your_api_key_here"
-    # 
-    # downloader = TNGDownloader(
-    #     api_key=API_KEY,
-    #     simulation='TNG100-1',
-    #     output_dir='./TNG100'
-    # )
-    # 
-    # # Test mode: download only first file of snapshot at z=0
-    # downloader.download_by_redshift(0.0, test_mode=True)
-    # 
-    # # Full download: all files for snapshot at z=0
-    # downloader.download_by_redshift(0.0, test_mode=False)
-    # 
-    # # Download multiple redshifts
-    # downloader.download_multiple_redshifts([0.0, 1.0, 2.0], test_mode=True)
-    
     main()
