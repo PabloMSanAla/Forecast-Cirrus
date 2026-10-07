@@ -11,6 +11,7 @@
 #include <dirent.h>
 #include <map>
 #include "functions.h"
+#include "ForecastConfig.hpp"
 using namespace std;
 
 
@@ -142,6 +143,49 @@ void readParameters(double *boxl,double *zs, double *fov,double *res,
 		    string *sim,
 		    string *planes_file,
 		    const string& custom_ini){ 
+
+  string cfg_path = custom_ini;
+  if (cfg_path.empty()) {
+    const char* env_cfg = std::getenv("FORECAST_CONFIG");
+    if (env_cfg != nullptr && env_cfg[0] != '\0') {
+      cfg_path = env_cfg;
+    }
+  }
+  if (cfg_path.empty()) {
+    if (ifstream("forecast.yaml").good()) cfg_path = "forecast.yaml";
+    else if (ifstream("forecast.yml").good()) cfg_path = "forecast.yml";
+    else if (ifstream("../forecast.yaml").good()) cfg_path = "../forecast.yaml";
+  }
+
+  if (!cfg_path.empty() && forecast::Config::isYaml(cfg_path)) {
+    try {
+      auto cfg = forecast::Config::load(cfg_path);
+      *boxl = cfg.box_size_mpc_over_h;
+      *zs = cfg.source_redshift;
+      *fov = cfg.fov_degrees;
+      *res = cfg.resolution_arcsec;
+      *filredshiftlist = cfg.redshift_list_file;
+      *filsnaplist = cfg.snaplist_file;
+      *filtimelist = cfg.timelist_file;
+      *idc = cfg.comoving_distances_file;
+      *pathsnap = cfg.snapshots_dir;
+      *rdir = cfg.lc_output_dir;
+      *seedcenter = cfg.seed_center;
+      *seedface = cfg.seed_face;
+      *seedsign = cfg.seed_sign;
+      *sim = cfg.sim_name;
+      *planes_file = cfg.planes_list_file;
+
+      const char* env_out = std::getenv("FORECAST_OUTPUT_DIR");
+      if (env_out != nullptr && env_out[0] != '\0') {
+        *rdir = string(env_out);
+      }
+      return;
+    } catch (const std::exception& e) {
+      cerr << "Error parsing YAML config " << cfg_path << ": " << e.what() << endl;
+      exit(2);
+    }
+  }
 
   string butstr;
   ifstream inputf;

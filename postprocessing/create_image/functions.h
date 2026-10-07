@@ -10,6 +10,7 @@
 #include <dirent.h>
 #include <map>
 #include <valarray>
+#include "ForecastConfig.hpp"
 using namespace std;
 
 // function declarations
@@ -57,6 +58,29 @@ int index_closest(std::vector<double>::iterator, std::vector<double>::iterator, 
 
 int index_closest(std::vector<float>::iterator, std::vector<float>::iterator, float);
 
+#include <sys/resource.h>
+
+// Darwin/Linux RSS monitoring: returns peak RSS in MB
+inline double getPeakRSS_MB() {
+  struct rusage usage;
+  getrusage(RUSAGE_SELF, &usage);
+#if defined(__APPLE__) && defined(__MACH__)
+  return (double)usage.ru_maxrss / (1024.0 * 1024.0);
+#else
+  return (double)usage.ru_maxrss / 1024.0;
+#endif
+}
+
+inline void checkMemoryCeiling(double ceiling_gb) {
+  double current_peak_mb = getPeakRSS_MB();
+  double ceiling_mb = ceiling_gb * 1024.0;
+  if (current_peak_mb > ceiling_mb) {
+    std::cerr << "Error: Memory ceiling exceeded! Peak RSS: " << current_peak_mb
+              << " MB > Limit: " << ceiling_mb << " MB (" << ceiling_gb << " GB)" << std::endl;
+    exit(3);
+  }
+}
+
 void readParameters(float* fov, float* res,
                     std::string* filter,
                     std::string* filfilters,
@@ -64,6 +88,7 @@ void readParameters(float* fov, float* res,
                     std::string* module,
                     std::string* catpath,
                     std::string* rdir,
+                    double* memory_ceiling_gb = nullptr,
                     const std::string& custom_ini = "");
 
 

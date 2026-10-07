@@ -10,6 +10,7 @@
 #include <dirent.h>
 #include <map>
 #include "functions.h"
+#include "ForecastConfig.hpp"
 using namespace std;
 
 
@@ -297,6 +298,60 @@ void readParameters(double *boxl, double *zs,
 		    string *model, string *imf,
 		    string *planes_file,
 		    const string& custom_ini){ 
+
+  string cfg_path = custom_ini;
+  if (cfg_path.empty()) {
+    const char* env_cfg = std::getenv("FORECAST_CONFIG");
+    if (env_cfg != nullptr && env_cfg[0] != '\0') {
+      cfg_path = env_cfg;
+    }
+  }
+  if (cfg_path.empty()) {
+    if (ifstream("forecast.yaml").good()) cfg_path = "forecast.yaml";
+    else if (ifstream("forecast.yml").good()) cfg_path = "forecast.yml";
+    else if (ifstream("../forecast.yaml").good()) cfg_path = "../forecast.yaml";
+  }
+
+  if (!cfg_path.empty() && forecast::Config::isYaml(cfg_path)) {
+    try {
+      auto cfg = forecast::Config::load(cfg_path);
+      *boxl = cfg.box_size_mpc_over_h;
+      *zs = cfg.source_redshift;
+      *filfilters = cfg.filters_file;
+      *filredshiftlist = cfg.redshift_list_file;
+      *filsnaplist = cfg.snaplist_file;
+      *filtimelist = cfg.timelist_file;
+      *idc = cfg.comoving_distances_file;
+      *pathsnap = cfg.snapshots_dir;
+      *lcpath = cfg.lc_output_dir;
+      *bc03dir = cfg.bc03_dir;
+      *rdir = cfg.df_output_dir;
+      *model = cfg.sps_model;
+      *imf = cfg.sps_imf;
+      *planes_file = cfg.planes_list_file;
+
+      const char* env_out = std::getenv("FORECAST_OUTPUT_DIR");
+      if (env_out != nullptr && env_out[0] != '\0') {
+        *rdir = string(env_out);
+      }
+      const char* env_lc = std::getenv("FORECAST_LC_DIR");
+      if (env_lc != nullptr && env_lc[0] != '\0') {
+        *lcpath = string(env_lc);
+      } else {
+        const char* env_lc_out = std::getenv("FORECAST_LC_OUTPUT_DIR");
+        if (env_lc_out != nullptr && env_lc_out[0] != '\0') {
+          *lcpath = string(env_lc_out);
+        }
+      }
+
+      if (!rdir->empty() && rdir->back() != '/') *rdir += "/";
+      if (!lcpath->empty() && lcpath->back() != '/') *lcpath += "/";
+      return;
+    } catch (const std::exception& e) {
+      cerr << "Error parsing YAML config " << cfg_path << ": " << e.what() << endl;
+      exit(2);
+    }
+  }
 
   string butstr;
   ifstream inputf;

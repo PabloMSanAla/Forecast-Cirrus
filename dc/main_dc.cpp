@@ -95,15 +95,15 @@ int main(int argc, char** argv) {
 
   for (int i = 1; i < argc; i++) {
     string arg = argv[i];
-    if (arg == "-ini") {
+    if (arg == "-ini" || arg == "-config" || arg == "-c") {
       if (i + 1 < argc) {
         custom_ini = argv[++i];
       } else {
-        cerr << "Error: -ini option requires a file path." << endl;
+        cerr << "Error: " << arg << " option requires a file path." << endl;
         exit(1);
       }
     } else if (arg == "-h" || arg == "--help") {
-      cout << "Usage: " << argv[0] << " <snapshot> <plane_number> [memory_ceiling_gb] [-ini <dc.ini>]" << endl;
+      cout << "Usage: " << argv[0] << " <snapshot> <plane_number> [memory_ceiling_gb] [-ini <dc.ini> | -c <forecast.yaml>]" << endl;
       exit(0);
     } else {
       positional_args.push_back(arg);

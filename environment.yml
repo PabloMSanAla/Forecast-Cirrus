@@ -1,0 +1,31 @@
+name: forecast
+channels:
+  - conda-forge
+  - defaults
+
+dependencies:
+  # Universal C/C++ Toolchain (Conda solver automatically selects clang on macOS, g++ on Linux)
+  - cxx-compiler
+  - c-compiler
+  - make
+  - cmake
+  - parallel
+
+  # Python & CLI Requirements
+  - python >=3.8
+  - pyyaml >=5.1
+
+  # Core Linear Algebra & Math Libraries
+  - gsl
+  - openblas
+  - lapack
+  - fftw
+  - eigen
+  - armadillo
+  - yaml-cpp
+
+  # Astronomy & Scientific I/O Libraries
+  - cfitsio
+  - ccfits
+  - hdf5
+

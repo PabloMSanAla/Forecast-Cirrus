@@ -318,9 +318,9 @@ def main():
     )
     parser.add_argument(
         "--module",
-        choices=["lc", "df", "dc", "igm", "all"],
+        choices=["lc", "df", "dc", "igm", "image", "all"],
         default="all",
-        help="Module(s) to test: lc, df, dc, igm, or all (default: all)",
+        help="Module(s) to test: lc, df, dc, igm, image, or all (default: all)",
     )
     parser.add_argument(
         "--planes-list",
@@ -366,6 +366,8 @@ def main():
             binaries_to_test.append(Path("./dc/executable_dc"))
         if args.module in ["igm", "all"]:
             binaries_to_test.append(Path("./igm/executable_igm"))
+        if args.module in ["image", "all"]:
+            binaries_to_test.append(Path("./postprocessing/create_image/create_image"))
 
     overall_success = True
     total_passed = 0

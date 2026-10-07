@@ -9,20 +9,30 @@ PROG = ./executable_df
 
 MAIN = main_df.cpp readTNGParticle.cpp SED.cpp functions.cpp
 
-# Detect Homebrew prefix (fallback to /opt/homebrew for Apple Silicon)
+# Detect Homebrew and Conda prefixes
 BREW_PREFIX ?= $(shell brew --prefix 2>/dev/null || echo /opt/homebrew)
+CONDA_PREFIX ?= $(shell echo "$$CONDA_PREFIX")
 
 CXX := clang++
 CXXFLAGS := -std=c++17 -O2 -g
 
-# Include paths (add more if your headers are elsewhere)
-CPPFLAGS := -I$(BREW_PREFIX)/include -I$(BREW_PREFIX)/include/eigen3 -I./
+# Include paths
+CPPFLAGS := -I../common
+LDFLAGS :=
 
-# Linker flags: search Homebrew libs and set rpath so runtime finds them
-LDFLAGS := -L$(BREW_PREFIX)/lib -Wl,-rpath,$(BREW_PREFIX)/lib
+# Prefer Homebrew on macOS if present, otherwise fallback to Conda
+ifneq ($(wildcard $(BREW_PREFIX)/include/.*),)
+CPPFLAGS += -I$(BREW_PREFIX)/include -I$(BREW_PREFIX)/include/eigen3
+LDFLAGS += -L$(BREW_PREFIX)/lib -Wl,-rpath,$(BREW_PREFIX)/lib
+else ifneq ($(CONDA_PREFIX),)
+CPPFLAGS += -I$(CONDA_PREFIX)/include -I$(CONDA_PREFIX)/include/eigen3
+LDFLAGS += -L$(CONDA_PREFIX)/lib -Wl,-rpath,$(CONDA_PREFIX)/lib
+endif
 
-# Libraries: prefer Homebrew libs; use Accelerate for BLAS/LAPACK on macOS
-LIBS := -lgsl -lgslcblas -lcfitsio -lCCfits -lfftw3 -larmadillo -lhdf5 -lhdf5_cpp -lm -framework Accelerate
+CPPFLAGS += -I./
+
+# Libraries: prefer Homebrew/Conda libs; use Accelerate for BLAS/LAPACK on macOS
+LIBS := -lyaml-cpp -lgsl -lgslcblas -lcfitsio -lCCfits -lfftw3 -larmadillo -lhdf5 -lhdf5_cpp -lm -framework Accelerate
 
 # Default target
 default: main

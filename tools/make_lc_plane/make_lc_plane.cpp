@@ -5,6 +5,7 @@
 #include <cmath>
 #include <algorithm>
 #include <cstdlib>
+#include "ForecastConfig.hpp"
 
 using namespace std;
 
@@ -59,13 +60,14 @@ double getY(const std::vector<double>& x, const std::vector<double>& y, double x
 void printHelp(const char* prog) {
   cout << "Usage: " << prog << " [options]" << endl;
   cout << "Options:" << endl;
-  cout << "  -ini <path>     Path to lc.ini (default: looks in FORECAST_LC_INI, ./lc.ini, ../../lc/lc.ini)" << endl;
-  cout << "  -o <path>       Output path for planes list (default: from lc.ini PLANES_LIST_FILE, or ./planes_list.txt)" << endl;
-  cout << "  -h, --help      Display this help message and exit" << endl;
+  cout << "  -c, -config <path>  Path to forecast.yaml configuration" << endl;
+  cout << "  -ini <path>         Path to lc.ini (default: looks in FORECAST_LC_INI, ./lc.ini, ../../lc/lc.ini)" << endl;
+  cout << "  -o <path>           Output path for planes list (default: from config PLANES_LIST_FILE, or ./planes_list.txt)" << endl;
+  cout << "  -h, --help          Display this help message and exit" << endl;
 }
 
 int main(int argc, char** argv) {
-  string ini_path = "";
+  string cfg_path = "";
   string output_file = "";
 
   for (int i = 1; i < argc; i++) {
@@ -73,8 +75,8 @@ int main(int argc, char** argv) {
     if (arg == "-h" || arg == "--help") {
       printHelp(argv[0]);
       return 0;
-    } else if (arg == "-ini" && i + 1 < argc) {
-      ini_path = argv[++i];
+    } else if ((arg == "-ini" || arg == "-config" || arg == "-c") && i + 1 < argc) {
+      cfg_path = argv[++i];
     } else if (arg == "-o" && i + 1 < argc) {
       output_file = argv[++i];
     } else {
@@ -84,52 +86,88 @@ int main(int argc, char** argv) {
     }
   }
 
-  // Resolve lc.ini
-  if (ini_path.empty()) {
-    const char* env_ini = std::getenv("FORECAST_LC_INI");
-    if (env_ini != nullptr && env_ini[0] != '\0') {
-      ini_path = env_ini;
-    } else if (ifstream("lc.ini").good()) {
-      ini_path = "lc.ini";
-    } else if (ifstream("lc/lc.ini").good()) {
-      ini_path = "lc/lc.ini";
-    } else if (ifstream("../../lc/lc.ini").good()) {
-      ini_path = "../../lc/lc.ini";
-    } else {
-      ini_path = "lc.ini";
+  // Resolve configuration file
+  if (cfg_path.empty()) {
+    const char* env_cfg = std::getenv("FORECAST_CONFIG");
+    if (env_cfg != nullptr && env_cfg[0] != '\0') {
+      cfg_path = env_cfg;
+    } else if (ifstream("forecast.yaml").good()) {
+      cfg_path = "forecast.yaml";
+    } else if (ifstream("forecast.yml").good()) {
+      cfg_path = "forecast.yml";
+    } else if (ifstream("../../forecast.yaml").good()) {
+      cfg_path = "../../forecast.yaml";
     }
   }
-
-  ifstream inputf(ini_path.c_str());
-  if (!inputf.is_open()) {
-    cerr << "Error: Cannot open configuration file '" << ini_path << "'." << endl;
-    return 1;
+  if (cfg_path.empty()) {
+    const char* env_ini = std::getenv("FORECAST_LC_INI");
+    if (env_ini != nullptr && env_ini[0] != '\0') {
+      cfg_path = env_ini;
+    } else if (ifstream("lc.ini").good()) {
+      cfg_path = "lc.ini";
+    } else if (ifstream("lc/lc.ini").good()) {
+      cfg_path = "lc/lc.ini";
+    } else if (ifstream("../../lc/lc.ini").good()) {
+      cfg_path = "../../lc/lc.ini";
+    } else {
+      cfg_path = "lc.ini";
+    }
   }
 
   double boxl = 0.0, zs = 0.0, fov = 0.0, res = 0.0;
   string filredshiftlist, filsnaplist, filtimelist, idc, pathsnap, rdir;
   long seedcenter = 0, seedface = 0, seedsign = 0;
-  string sim, planes_file_ini;
+  string sim = "TNG", planes_file_ini;
 
-  string tag;
-  inputf >> tag >> boxl;
-  inputf >> tag >> zs;
-  inputf >> tag >> fov;
-  inputf >> tag >> res;
-  inputf >> tag >> filredshiftlist;
-  inputf >> tag >> filsnaplist;
-  inputf >> tag >> filtimelist;
-  inputf >> tag >> idc;
-  inputf >> tag >> pathsnap;
-  inputf >> tag >> rdir;
-  inputf >> tag >> seedcenter;
-  inputf >> tag >> seedface;
-  inputf >> tag >> seedsign;
-  inputf >> tag >> sim;
-  if (inputf >> tag >> planes_file_ini) {
-    // found PLANES_LIST_FILE
+  if (forecast::Config::isYaml(cfg_path)) {
+    try {
+      auto cfg = forecast::Config::load(cfg_path);
+      boxl = cfg.box_size_mpc_over_h;
+      zs = cfg.source_redshift;
+      fov = cfg.fov_degrees;
+      res = cfg.resolution_arcsec;
+      filredshiftlist = cfg.redshift_list_file;
+      filsnaplist = cfg.snaplist_file;
+      filtimelist = cfg.timelist_file;
+      idc = cfg.comoving_distances_file;
+      pathsnap = cfg.snapshots_dir;
+      rdir = cfg.lc_output_dir;
+      seedcenter = cfg.seed_center;
+      seedface = cfg.seed_face;
+      seedsign = cfg.seed_sign;
+      sim = "TNG";
+      planes_file_ini = cfg.planes_list_file;
+    } catch (const std::exception& e) {
+      cerr << "Error parsing YAML config '" << cfg_path << "': " << e.what() << endl;
+      return 1;
+    }
+  } else {
+    ifstream inputf(cfg_path.c_str());
+    if (!inputf.is_open()) {
+      cerr << "Error: Cannot open configuration file '" << cfg_path << "'." << endl;
+      return 1;
+    }
+
+    string tag;
+    inputf >> tag >> boxl;
+    inputf >> tag >> zs;
+    inputf >> tag >> fov;
+    inputf >> tag >> res;
+    inputf >> tag >> filredshiftlist;
+    inputf >> tag >> filsnaplist;
+    inputf >> tag >> filtimelist;
+    inputf >> tag >> idc;
+    inputf >> tag >> pathsnap;
+    inputf >> tag >> rdir;
+    inputf >> tag >> seedcenter;
+    inputf >> tag >> seedface;
+    inputf >> tag >> seedsign;
+    inputf >> tag >> sim;
+    if (inputf >> tag >> planes_file_ini) {
+      // found PLANES_LIST_FILE
+    }
+    inputf.close();
   }
-  inputf.close();
 
   if (output_file.empty()) {
     if (!planes_file_ini.empty()) {
@@ -142,7 +180,7 @@ int main(int argc, char** argv) {
   cout << "============================================================" << endl;
   cout << " FORECAST - Lightcone Plane List Generator (make_lc_plane) " << endl;
   cout << "============================================================" << endl;
-  cout << "Config file:      " << ini_path << endl;
+  cout << "Config file:      " << cfg_path << endl;
   cout << "Box size:         " << boxl << " Mpc/h" << endl;
   cout << "Source redshift:  " << zs << endl;
   cout << "Redshift list:    " << filredshiftlist << endl;

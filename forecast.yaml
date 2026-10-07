@@ -1,0 +1,81 @@
+# ==============================================================================
+#                     FORECAST Unified Pipeline Configuration
+# ==============================================================================
+# This single configuration file defines all simulation, cosmology, geometry,
+# stellar population synthesis, and output path parameters for the entire
+# FORECAST pipeline (LC, DF, DC, IGM, Create Image, and Plane generation).
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# 1. Simulation & Cosmology Settings (Shared across LC, DF, DC, IGM)
+# ------------------------------------------------------------------------------
+simulation:
+  name: "TNG"                                 # Simulation identifier (e.g. TNG, Illustris, Eagle)
+  box_size_mpc_over_h: 35.0                   # Periodic box side length [cMpc/h]
+  snapshots_dir: "/Volumes/PMSAdrive/pmsa/storage/TNG/TNG50-2"
+  snaplist_file: "/Users/pmsanch1/code/cirrus-sim/snaplist_TNG.txt"
+  timelist_file: "/Users/pmsanch1/code/cirrus-sim/timelist_TNG.txt"
+  redshift_list_file: "/Users/pmsanch1/code/cirrus-sim/redshift_list_TNG.txt"
+  comoving_distances_file: "files/LCDM-comovingdistTNG.dat"
+
+# ------------------------------------------------------------------------------
+# 2. Lightcone Geometry & Observer Settings (Used by LC, make_lc_plane, Image)
+# ------------------------------------------------------------------------------
+geometry:
+  source_redshift: 0.69                       # Maximum lightcone source redshift
+  fov_degrees: 1.16                           # Field of view side length [degrees]
+  resolution_arcsec: 0.1                      # Image pixel scale [arcseconds/pixel]
+  planes_list_file: "lc/planes_list.txt"
+
+  # Periodic box randomization seeds (Blaizot et al. 2005 / Fortuni et al. 2023)
+  randomization_seeds:
+    seed_1_center: "0121"                     # Continuous 3D spatial shift (x0, y0, z0)
+    seed_2_face: "1210"                       # 3D axis permutation (1-6 dice face roll)
+    seed_3_sign: "2101"                       # Cartesian axis parity flip (+1 / -1)
+
+# ------------------------------------------------------------------------------
+# 3. Stellar Population Synthesis (Shared across DF, DC, IGM)
+# ------------------------------------------------------------------------------
+sps:
+  model: "bc03"                               # 'bc03' (Bruzual & Charlot 2003) or 'cb16' (Gutkin et al. 2016)
+  imf: "chabrier"                             # 'chabrier' or 'salpeter'
+  bc03_dir: "/Users/pmsanch1/storage/FORECAST/bc03/"
+  filters_file: "files/filters.dat"           # Master filter list file
+  filters_dir: "files/filters/"               # Directory with individual filter response curves
+
+# ------------------------------------------------------------------------------
+# 4. Module-Specific Custom Options
+# ------------------------------------------------------------------------------
+modules:
+  # Dust-Correction Module
+  dc:
+    read_gas_mode: 1                          # 0 = read gas from catalog, 1 = compute from scratch
+    mag_limit_filter_0: 33.5                  # Apparent magnitude cutoff for filter index 0
+    extinction_file: "dc/extinctionCCM89.dat"  # Extinction curve file (e.g. Cardelli et al. 1989)
+
+  # IGM Attenuation Module
+  igm:
+    chunk_size_override: 0                    # 0 = dynamic RAM-budget sizing; >0 = force fixed chunk size
+
+  # Postprocessing Image Generation Module
+  create_image:
+    target_filter: "Roman_WFI_f158"           # Filter to rasterize into FITS image
+    input_catalog_source: "df"                # Source fluxes: 'df', 'dc', or 'igm'
+
+# ------------------------------------------------------------------------------
+# 5. Output Directories (Explicitly configured - no hardcoded assumptions)
+# ------------------------------------------------------------------------------
+paths:
+  lc_output_dir: "/Volumes/PMSAdrive/pmsa/storage/TNG/forecast/lc/"
+  df_output_dir: "/Volumes/PMSAdrive/pmsa/storage/TNG/forecast/df/"
+  dc_output_dir: "/Volumes/PMSAdrive/pmsa/storage/TNG/forecast/dc/"
+  igm_output_dir: "/Volumes/PMSAdrive/pmsa/storage/TNG/forecast/igm/"
+  image_output_dir: "/Volumes/PMSAdrive/pmsa/storage/TNG/forecast/image/"
+  logs_dir: "logs/"
+
+# ------------------------------------------------------------------------------
+# 6. Pipeline Execution & Memory Ceilings
+# ------------------------------------------------------------------------------
+execution:
+  memory_ceiling_gb: 4.0                      # Memory ceiling in GB per process
+  default_num_workers: 4                      # Default parallel GNU parallel workers

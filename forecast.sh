@@ -17,6 +17,7 @@ Workflow per CPU worker:
 Usage: ./forecast.sh [options]
 
 Options:
+  -c, --config:  Path to unified YAML configuration file (e.g. forecast.yaml)
   -n:            Number of parallel processors/workers (default: 1)
   -i:            Initial plane number (default: 0)
   -max:          Maximum plane number to process (default: max from planes_list.txt)
@@ -34,6 +35,7 @@ Options:
   -h, --help:    Show this help message and exit
 
 Example usage:
+  ./forecast.sh -c forecast.yaml -n 8 -i 0
   ./forecast.sh -n 8 -i 0
   ./forecast.sh -n 16 -i 0 -m 4.0 -j forecast_jobs.log -r forecast_logs/
   ./forecast.sh -n 4 -i 10 -max 20 -f
@@ -44,6 +46,7 @@ EOF
 # Resolve directory of this script
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+config_yaml=""
 num_processors=1  # Default number of processors
 init_plane=0     # Default initial plane number
 max_plane_cli="" # Optional maximum plane number
@@ -65,6 +68,10 @@ while [[ $# -gt 0 ]]; do
         -h|--help)
             help
             exit 0
+            ;;
+        -c|--config)
+            config_yaml="$2"
+            shift 2
             ;;
         -n)
             num_processors="$2"
@@ -134,6 +141,21 @@ done
 if ! command -v parallel &> /dev/null; then
     echo "GNU parallel is not installed. Please install it (e.g. brew install parallel or apt install parallel)."
     exit 1
+fi
+
+# Check if YAML config was provided or default forecast.yaml exists
+if [ -n "$config_yaml" ] || { [ -z "$ini_lc" ] && [ -z "$ini_dir" ] && [ -f "forecast.yaml" ]; }; then
+    if [ -z "$config_yaml" ]; then
+        config_yaml="forecast.yaml"
+    fi
+    if [ -f "$config_yaml" ]; then
+        config_yaml="$(cd "$(dirname "$config_yaml")" && pwd)/$(basename "$config_yaml")"
+        export FORECAST_CONFIG="$config_yaml"
+        [ -z "$ini_lc" ] && ini_lc="$config_yaml"
+        [ -z "$ini_df" ] && ini_df="$config_yaml"
+        [ -z "$ini_dc" ] && ini_dc="$config_yaml"
+        [ -z "$ini_igm" ] && ini_igm="$config_yaml"
+    fi
 fi
 
 # 1. Resolve INI files
@@ -220,7 +242,7 @@ if [ -z "$ini_igm" ]; then
     fi
 fi
 
-# Validate INI files exist
+# Validate configuration files exist
 for ini_f in "$ini_lc" "$ini_df" "$ini_dc" "$ini_igm"; do
     if [ -z "$ini_f" ] || [ ! -f "$ini_f" ]; then
         echo "Error: Configuration file '$ini_f' not found."
@@ -234,28 +256,33 @@ ini_df="$(cd "$(dirname "$ini_df")" && pwd)/$(basename "$ini_df")"
 ini_dc="$(cd "$(dirname "$ini_dc")" && pwd)/$(basename "$ini_dc")"
 ini_igm="$(cd "$(dirname "$ini_igm")" && pwd)/$(basename "$ini_igm")"
 
-# 2. Extract output directories from each INI file
+# 2. Extract output directories from each config file
 extract_outdir() {
     local ini_f=$1
+    local mod=$2
     local out=""
     if [ -n "$FORECAST_OUTPUT_DIR" ]; then
         out="$FORECAST_OUTPUT_DIR"
+    elif [[ "$ini_f" == *.yaml || "$ini_f" == *.yml ]]; then
+        out=$(python3 -c "import yaml; cfg=yaml.safe_load(open('$ini_f')); print(cfg.get('paths', {}).get('${mod}_output_dir', ''))" 2>/dev/null)
     else
         out=$(awk '/!...PATH_WHERE_TO_OUTPUT_RESULTS/{getline; print $1}' "$ini_f")
     fi
-    [[ "$out" != */ ]] && out="${out}/"
+    [[ -n "$out" && "$out" != */ ]] && out="${out}/"
     echo "$out"
 }
 
-out_dir_lc=$(extract_outdir "$ini_lc")
-out_dir_df=$(extract_outdir "$ini_df")
-out_dir_dc=$(extract_outdir "$ini_dc")
-out_dir_igm=$(extract_outdir "$ini_igm")
+out_dir_lc=$(extract_outdir "$ini_lc" "lc")
+out_dir_df=$(extract_outdir "$ini_df" "df")
+out_dir_dc=$(extract_outdir "$ini_dc" "dc")
+out_dir_igm=$(extract_outdir "$ini_igm" "igm")
 
 # 3. Resolve planes_list.txt path
 if [ -z "$planes_list_path" ]; then
     if [ -n "$FORECAST_PLANES_LIST" ] && [ -f "$FORECAST_PLANES_LIST" ]; then
         planes_list_path="$FORECAST_PLANES_LIST"
+    elif [[ "$ini_lc" == *.yaml || "$ini_lc" == *.yml ]]; then
+        planes_list_path=$(python3 -c "import yaml; cfg=yaml.safe_load(open('$ini_lc')); print(cfg.get('geometry', {}).get('planes_list_file', ''))" 2>/dev/null)
     else
         planes_list_path=$(awk '/!...PLANES_LIST_FILE/{getline; print $1}' "$ini_lc")
     fi
@@ -300,10 +327,14 @@ find_executable() {
     local name="executable_${mod}"
     if [ -n "$bin_dir" ] && [ -x "${bin_dir}/${name}" ]; then
         echo "$(cd "$(dirname "${bin_dir}/${name}")" && pwd)/${name}"
+    elif command -v "${name}" >/dev/null 2>&1; then
+        command -v "${name}"
     elif [ -x "./${name}" ]; then
         echo "$(cd "$(dirname "./${name}")" && pwd)/${name}"
     elif [ -x "${PWD}/${name}" ]; then
         echo "${PWD}/${name}"
+    elif [ -x "${SCRIPT_DIR}/bin/${name}" ]; then
+        echo "${SCRIPT_DIR}/bin/${name}"
     elif [ -x "${SCRIPT_DIR}/${name}" ]; then
         echo "${SCRIPT_DIR}/${name}"
     elif [ -x "${SCRIPT_DIR}/${mod}/${name}" ]; then
@@ -383,6 +414,15 @@ run_forecast_pipeline() {
     local exp_dc="${out_dc}flux.dc.${snapshot}_${plane}.txt"
     local exp_igm="${out_igm}flux.igm.${snapshot}_${plane}.txt"
 
+    local flag_lc="-ini"
+    [[ "$ini_lc" == *.yaml || "$ini_lc" == *.yml ]] && flag_lc="-c"
+    local flag_df="-ini"
+    [[ "$ini_df" == *.yaml || "$ini_df" == *.yml ]] && flag_df="-c"
+    local flag_dc="-ini"
+    [[ "$ini_dc" == *.yaml || "$ini_dc" == *.yml ]] && flag_dc="-c"
+    local flag_igm="-ini"
+    [[ "$ini_igm" == *.yaml || "$ini_igm" == *.yml ]] && flag_igm="-c"
+
     echo ">>> [Plane ${plane} / Snap ${snapshot}] Starting FORECAST pipeline..."
 
     # -------------------------------------------------------------
@@ -392,7 +432,7 @@ run_forecast_pipeline() {
         echo "  [1/4 LC]  [SKIP] Output exists: $exp_lc"
     else
         echo "  [1/4 LC]  Running executable_lc for snap ${snapshot}, plane ${plane}..."
-        "${exe_lc}" "${snapshot}" "${plane}" "${mem_limit}" -ini "${ini_lc}"
+        "${exe_lc}" "${snapshot}" "${plane}" "${mem_limit}" "${flag_lc}" "${ini_lc}"
         if [ $? -ne 0 ]; then
             echo "  [ERROR] Module LC failed on snapshot ${snapshot}, plane ${plane}."
             return 1
@@ -406,7 +446,7 @@ run_forecast_pipeline() {
         echo "  [2/4 DF]  [SKIP] Output exists: $exp_df"
     else
         echo "  [2/4 DF]  Running executable_df for snap ${snapshot}, plane ${plane}..."
-        "${exe_df}" "${snapshot}" "${plane}" "${mem_limit}" -ini "${ini_df}"
+        "${exe_df}" "${snapshot}" "${plane}" "${mem_limit}" "${flag_df}" "${ini_df}"
         if [ $? -ne 0 ]; then
             echo "  [ERROR] Module DF failed on snapshot ${snapshot}, plane ${plane}."
             return 1
@@ -420,7 +460,7 @@ run_forecast_pipeline() {
         echo "  [3/4 DC]  [SKIP] Output exists: $exp_dc"
     else
         echo "  [3/4 DC]  Running executable_dc for snap ${snapshot}, plane ${plane}..."
-        "${exe_dc}" "${snapshot}" "${plane}" "${mem_limit}" -ini "${ini_dc}"
+        "${exe_dc}" "${snapshot}" "${plane}" "${mem_limit}" "${flag_dc}" "${ini_dc}"
         if [ $? -ne 0 ]; then
             echo "  [ERROR] Module DC failed on snapshot ${snapshot}, plane ${plane}."
             return 1
@@ -434,7 +474,7 @@ run_forecast_pipeline() {
         echo "  [4/4 IGM] [SKIP] Output exists: $exp_igm"
     else
         echo "  [4/4 IGM] Running executable_igm for snap ${snapshot}, plane ${plane}..."
-        "${exe_igm}" "${snapshot}" "${plane}" "${mem_limit}" -ini "${ini_igm}"
+        "${exe_igm}" "${snapshot}" "${plane}" "${mem_limit}" "${flag_igm}" "${ini_igm}"
         if [ $? -ne 0 ]; then
             echo "  [ERROR] Module IGM failed on snapshot ${snapshot}, plane ${plane}."
             return 1

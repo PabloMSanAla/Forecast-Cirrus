@@ -296,6 +296,69 @@ void readParameters(double *boxl, float *maglim,
 		    string *planes_file,
 		    const string& custom_ini){ 
 
+  string cfg_path = custom_ini;
+  if (cfg_path.empty()) {
+    const char* env_cfg = std::getenv("FORECAST_CONFIG");
+    if (env_cfg != nullptr && env_cfg[0] != '\0') {
+      cfg_path = env_cfg;
+    }
+  }
+  if (cfg_path.empty()) {
+    if (ifstream("forecast.yaml").good()) cfg_path = "forecast.yaml";
+    else if (ifstream("forecast.yml").good()) cfg_path = "forecast.yml";
+    else if (ifstream("../forecast.yaml").good()) cfg_path = "../forecast.yaml";
+  }
+
+  if (!cfg_path.empty() && forecast::Config::isYaml(cfg_path)) {
+    try {
+      auto cfg = forecast::Config::load(cfg_path);
+      *boxl = cfg.box_size_mpc_over_h;
+      *maglim = (float)cfg.dc_mag_limit_filter_0;
+      *filfilters = cfg.filters_file;
+      *filsnaplist = cfg.snaplist_file;
+      *filtimelist = cfg.timelist_file;
+      *idc = cfg.comoving_distances_file;
+      *pathsnap = cfg.snapshots_dir;
+      *bc03dir = cfg.bc03_dir;
+      *dfpath = cfg.df_output_dir;
+      *rdir = cfg.dc_output_dir;
+      *read = cfg.dc_read_gas_mode;
+      *model = cfg.sps_model;
+      *imf = cfg.sps_imf;
+      *filextc = cfg.dc_extinction_file;
+      *planes_file = cfg.planes_list_file;
+
+      const char* env_out = std::getenv("FORECAST_OUTPUT_DIR");
+      if (env_out != nullptr && env_out[0] != '\0') {
+        *rdir = string(env_out);
+      }
+      const char* env_df = std::getenv("FORECAST_DF_DIR");
+      if (env_df != nullptr && env_df[0] != '\0') {
+        *dfpath = string(env_df);
+      } else {
+        const char* env_df_out = std::getenv("FORECAST_DF_OUTPUT_DIR");
+        if (env_df_out != nullptr && env_df_out[0] != '\0') {
+          *dfpath = string(env_df_out);
+        }
+      }
+      const char* env_ext = std::getenv("FORECAST_EXTINCTION_FILE");
+      if (env_ext != nullptr && env_ext[0] != '\0') {
+        *filextc = string(env_ext);
+      }
+      const char* env_planes = std::getenv("FORECAST_PLANES_LIST");
+      if (env_planes != nullptr && env_planes[0] != '\0') {
+        *planes_file = string(env_planes);
+      }
+
+      if (!rdir->empty() && rdir->back() != '/') *rdir += "/";
+      if (!dfpath->empty() && dfpath->back() != '/') *dfpath += "/";
+      return;
+    } catch (const std::exception& e) {
+      cerr << "Error parsing YAML config " << cfg_path << ": " << e.what() << endl;
+      exit(2);
+    }
+  }
+
   string butstr;
   ifstream inputf;
   if (!custom_ini.empty()) {

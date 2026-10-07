@@ -302,6 +302,62 @@ void readParameters(double *boxl,
 		    string *planes_file,
 		    const string& custom_ini){ 
 
+  string cfg_path = custom_ini;
+  if (cfg_path.empty()) {
+    const char* env_cfg = std::getenv("FORECAST_CONFIG");
+    if (env_cfg != nullptr && env_cfg[0] != '\0') {
+      cfg_path = env_cfg;
+    }
+  }
+  if (cfg_path.empty()) {
+    if (ifstream("forecast.yaml").good()) cfg_path = "forecast.yaml";
+    else if (ifstream("forecast.yml").good()) cfg_path = "forecast.yml";
+    else if (ifstream("../forecast.yaml").good()) cfg_path = "../forecast.yaml";
+  }
+
+  if (!cfg_path.empty() && forecast::Config::isYaml(cfg_path)) {
+    try {
+      auto cfg = forecast::Config::load(cfg_path);
+      *boxl = cfg.box_size_mpc_over_h;
+      *filfilters = cfg.filters_file;
+      *filsnaplist = cfg.snaplist_file;
+      *filtimelist = cfg.timelist_file;
+      *idc = cfg.comoving_distances_file;
+      *pathsnap = cfg.snapshots_dir;
+      *bc03dir = cfg.bc03_dir;
+      *dcpath = cfg.dc_output_dir;
+      *rdir = cfg.igm_output_dir;
+      *model = cfg.sps_model;
+      *imf = cfg.sps_imf;
+      *planes_file = cfg.planes_list_file;
+
+      const char* env_out = std::getenv("FORECAST_OUTPUT_DIR");
+      if (env_out != nullptr && env_out[0] != '\0') {
+        *rdir = string(env_out);
+      }
+      const char* env_dc = std::getenv("FORECAST_DC_DIR");
+      if (env_dc != nullptr && env_dc[0] != '\0') {
+        *dcpath = string(env_dc);
+      } else {
+        const char* env_dc_out = std::getenv("FORECAST_DC_OUTPUT_DIR");
+        if (env_dc_out != nullptr && env_dc_out[0] != '\0') {
+          *dcpath = string(env_dc_out);
+        }
+      }
+      const char* env_planes = std::getenv("FORECAST_PLANES_LIST");
+      if (env_planes != nullptr && env_planes[0] != '\0') {
+        *planes_file = string(env_planes);
+      }
+
+      if (!rdir->empty() && rdir->back() != '/') *rdir += "/";
+      if (!dcpath->empty() && dcpath->back() != '/') *dcpath += "/";
+      return;
+    } catch (const std::exception& e) {
+      cerr << "Error parsing YAML config " << cfg_path << ": " << e.what() << endl;
+      exit(2);
+    }
+  }
+
   string butstr;
   ifstream inputf;
   string used_ini_path;

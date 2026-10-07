@@ -32,6 +32,7 @@ num_processors=1   # Default number of processors
 init_plane=0      # Default initial plane number
 planes_list_path=""
 ini_file="image.ini"
+memory_ceiling_gb=4.0
 force_run=false
 
 # Parse command-line arguments
@@ -53,8 +54,12 @@ while [[ $# -gt 0 ]]; do
             planes_list_path="$2"
             shift 2
             ;;
-        -ini)
+        -ini|-c|--config)
             ini_file="$2"
+            shift 2
+            ;;
+        -m|--mem)
+            memory_ceiling_gb="$2"
             shift 2
             ;;
         -f|--force)
@@ -173,6 +178,7 @@ run_im() {
     local module=$6
     local force=$7
     local ini_path=$8
+    local mem_limit=$9
 
     local expected_output="${out_dir}${filter}.${module}.${snapshot}_${plane}.fits"
     local input_cat="${cat_path}flux.${module}.${snapshot}_${plane}.txt"
@@ -191,7 +197,21 @@ run_im() {
 
     echo "Processing image for snapshot: $snapshot, plane: $plane -> $expected_output"
     
-    ./create_image "${snapshot}" "${plane}" -ini "${ini_path}"
+    local flag="-ini"
+    [[ "$ini_path" == *.yaml || "$ini_path" == *.yml ]] && flag="-c"
+
+    local exe=""
+    if command -v create_image >/dev/null 2>&1; then
+        exe="$(command -v create_image)"
+    elif [ -x "./create_image" ]; then
+        exe="./create_image"
+    elif [ -x "postprocessing/create_image/create_image" ]; then
+        exe="postprocessing/create_image/create_image"
+    elif [ -x "../create_image" ]; then
+        exe="../create_image"
+    fi
+
+    "${exe}" "${snapshot}" "${plane}" "${mem_limit:-4.0}" "${flag}" "${ini_path}"
     local status=$?
     
     if [ $status -ne 0 ]; then
@@ -207,7 +227,7 @@ export -f run_im
 for (( i = 0; i < $nl; i++ ))
 do
     if [[ "${planes[$i]}" -ge "$init_plane" && "${planes[$i]}" -le "$max_planes" ]]; then
-        echo "${snaps[$i]} ${planes[$i]} ${output_dir} ${cat_dir} ${filter_name} ${module_name} ${force_run} ${ini_file}"
+        echo "${snaps[$i]} ${planes[$i]} ${output_dir} ${cat_dir} ${filter_name} ${module_name} ${force_run} ${ini_file} ${memory_ceiling_gb}"
     fi
-done | parallel --bar --jobs "$num_processors" --colsep ' ' run_im {1} {2} {3} {4} {5} {6} {7} {8}
+done | parallel --bar --jobs "$num_processors" --colsep ' ' run_im {1} {2} {3} {4} {5} {6} {7} {8} {9}
 

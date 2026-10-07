@@ -9,6 +9,7 @@
 #include <cmath>
 #include <dirent.h>
 #include <map>
+#include "ForecastConfig.hpp"
 using namespace std;
 
 double getY(std:: vector<double> , std:: vector<double> ,double );

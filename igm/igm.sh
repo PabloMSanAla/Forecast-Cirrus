@@ -57,11 +57,15 @@ while [[ $# -gt 0 ]]; do
             init_plane="$2"
             shift 2
             ;;
+        -max)
+            max_plane_cli="$2"
+            shift 2
+            ;;
         -lc)
             planes_list_path="$2"
             shift 2
             ;;
-        -ini)
+        -ini|-c|--config)
             ini_file="$2"
             shift 2
             ;;
@@ -107,15 +111,17 @@ if [ ! -f "$ini_file" ]; then
     exit 1
 fi
 
-# 2. Extract output directory directly from igm.ini
+# 2. Extract output directory directly from igm.ini or YAML
 if [ -n "$FORECAST_OUTPUT_DIR" ]; then
     output_dir="$FORECAST_OUTPUT_DIR"
+elif [[ "$ini_file" == *.yaml || "$ini_file" == *.yml ]]; then
+    output_dir=$(python3 -c "import yaml; cfg=yaml.safe_load(open('$ini_file')); print(cfg.get('paths', {}).get('igm_output_dir', ''))" 2>/dev/null)
 else
     output_dir=$(awk '/!...PATH_WHERE_TO_OUTPUT_RESULTS/{getline; print $1}' "$ini_file")
 fi
 
 if [ -z "$output_dir" ]; then
-    echo "Error: PATH_WHERE_TO_OUTPUT_RESULTS not found in '$ini_file'."
+    echo "Error: Output directory not found in '$ini_file'."
     exit 1
 fi
 # Ensure trailing slash
@@ -125,6 +131,8 @@ fi
 if [ -z "$planes_list_path" ]; then
     if [ -n "$FORECAST_PLANES_LIST" ] && [ -f "$FORECAST_PLANES_LIST" ]; then
         planes_list_path="$FORECAST_PLANES_LIST"
+    elif [[ "$ini_file" == *.yaml || "$ini_file" == *.yml ]]; then
+        planes_list_path=$(python3 -c "import yaml; cfg=yaml.safe_load(open('$ini_file')); print(cfg.get('geometry', {}).get('planes_list_file', ''))" 2>/dev/null)
     elif [ -f "$ini_file" ]; then
         planes_list_path=$(awk '/!...PLANES_LIST_FILE/{getline; print $1}' "$ini_file")
     fi
@@ -155,6 +163,9 @@ do
 done
 
 max_planes=$(printf "%s\n" "${planes[@]}" | sort -nr | head -n 1)
+if [ -n "$max_plane_cli" ]; then
+    max_planes="$max_plane_cli"
+fi
 
 echo "Configuration:"
 echo "  Planes list: $planes_list_path"
@@ -194,9 +205,22 @@ run_igm() {
         return 0
     fi
 
+    local exec_bin=""
+    if command -v executable_igm >/dev/null 2>&1; then
+        exec_bin="$(command -v executable_igm)"
+    elif [ -x "./executable_igm" ]; then
+        exec_bin="./executable_igm"
+    elif [ -x "igm/executable_igm" ]; then
+        exec_bin="igm/executable_igm"
+    elif [ -x "../igm/executable_igm" ]; then
+        exec_bin="../igm/executable_igm"
+    fi
+
     echo "Processing snapshot: $snapshot with plane number: $plane"
     
-    ./executable_igm "${snapshot}" "${plane}" "${mem}" -ini "${ini_path}"
+    local flag="-ini"
+    [[ "$ini_path" == *.yaml || "$ini_path" == *.yml ]] && flag="-c"
+    "$exec_bin" "${snapshot}" "${plane}" "${mem}" "${flag}" "${ini_path}"
     
     # Check if the command was successful
     if [ $? -ne 0 ]; then

@@ -299,7 +299,64 @@ void readParameters(float* fov, float* res,
                     std::string* module,
                     std::string* catpath,
                     std::string* rdir,
+                    double* memory_ceiling_gb,
                     const std::string& custom_ini){ 
+
+  string cfg_path = custom_ini;
+  if (cfg_path.empty()) {
+    const char* env_cfg = std::getenv("FORECAST_CONFIG");
+    if (env_cfg != nullptr && env_cfg[0] != '\0') {
+      cfg_path = env_cfg;
+    }
+  }
+  if (cfg_path.empty()) {
+    if (ifstream("forecast.yaml").good()) cfg_path = "forecast.yaml";
+    else if (ifstream("forecast.yml").good()) cfg_path = "forecast.yml";
+    else if (ifstream("../../forecast.yaml").good()) cfg_path = "../../forecast.yaml";
+    else if (ifstream("../forecast.yaml").good()) cfg_path = "../forecast.yaml";
+  }
+
+  if (!cfg_path.empty() && forecast::Config::isYaml(cfg_path)) {
+    try {
+      auto cfg = forecast::Config::load(cfg_path);
+      *fov = (float)cfg.fov_degrees;
+      *res = (float)cfg.resolution_arcsec;
+      *filter = cfg.image_target_filter;
+      *filfilters = cfg.filters_file;
+      *planes_file = cfg.planes_list_file;
+      *module = cfg.image_catalog_source;
+      *catpath = cfg.image_catalog_dir;
+      *rdir = cfg.image_output_dir;
+
+      if (memory_ceiling_gb != nullptr && cfg.memory_ceiling_gb > 0.0) {
+        *memory_ceiling_gb = cfg.memory_ceiling_gb;
+      }
+
+      const char* env_out = std::getenv("FORECAST_OUTPUT_DIR");
+      if (env_out != nullptr && env_out[0] != '\0') {
+        *rdir = string(env_out);
+      }
+      const char* env_planes = std::getenv("FORECAST_PLANES_LIST");
+      if (env_planes != nullptr && env_planes[0] != '\0') {
+        *planes_file = string(env_planes);
+      }
+      const char* env_mem = std::getenv("FORECAST_MEMORY_CEILING_GB");
+      if (env_mem != nullptr && env_mem[0] != '\0' && memory_ceiling_gb != nullptr) {
+        try { *memory_ceiling_gb = std::stod(env_mem); } catch (...) {}
+      }
+
+      if (!rdir->empty() && rdir->back() != '/') {
+        *rdir += "/";
+      }
+      if (!catpath->empty() && catpath->back() != '/') {
+        *catpath += "/";
+      }
+      return;
+    } catch (const std::exception& e) {
+      cerr << "Error parsing YAML config " << cfg_path << ": " << e.what() << endl;
+      exit(2);
+    }
+  }
 
   string butstr;
   ifstream inputf;
@@ -319,7 +376,6 @@ void readParameters(float* fov, float* res,
     inputf.open("postprocessing/create_image/image.ini");
   }
 
-
   if(inputf.is_open()){
     inputf >> butstr; // fov dim by side in degrees
     inputf >> *fov;
@@ -336,7 +392,13 @@ void readParameters(float* fov, float* res,
     inputf >> butstr; // path where input catalogues are located
     inputf >> *catpath;
     inputf >> butstr; // path where outputs are located
-    inputf >> *rdir;  
+    inputf >> *rdir;
+
+    while (inputf >> butstr) {
+      if (butstr == "!...MEMORY_CEILING_GB" && memory_ceiling_gb != nullptr) {
+        inputf >> *memory_ceiling_gb;
+      }
+    }
     inputf.close();
 
     // Allow environment variable overrides
@@ -347,6 +409,10 @@ void readParameters(float* fov, float* res,
     const char* env_planes = std::getenv("FORECAST_PLANES_LIST");
     if (env_planes != nullptr && env_planes[0] != '\0') {
       *planes_file = string(env_planes);
+    }
+    const char* env_mem = std::getenv("FORECAST_MEMORY_CEILING_GB");
+    if (env_mem != nullptr && env_mem[0] != '\0' && memory_ceiling_gb != nullptr) {
+      try { *memory_ceiling_gb = std::stod(env_mem); } catch (...) {}
     }
 
     if (!rdir->empty() && rdir->back() != '/') {
