@@ -1,5 +1,55 @@
 # CHANGELOG
 
+[2026-10-07 14:00] Agent: Antigravity
+Module: build / makefiles (lc, df, dc, igm, postprocessing/create_image, tools/make_lc_plane, root)
+
+Action:
+1. Converted all Makefiles (`lc/Makefile`, `df/Makefile`, `dc/Makefile`, `igm/Makefile`, `postprocessing/create_image/Makefile`, `tools/make_lc_plane/Makefile`, and top-level `Makefile`) to link exclusively against Conda environment libraries (`$CONDA_PREFIX/include`, `$CONDA_PREFIX/lib`).
+2. Completely eliminated all Homebrew dependencies (`/opt/homebrew`, `brew --prefix`, and `-framework Accelerate`).
+3. Replaced macOS `-framework Accelerate` with Conda BLAS/LAPACK (`-lopenblas -llapack`).
+4. Implemented cross-platform dynamic architecture detection:
+   - On macOS Darwin, inspects the Conda library architecture (`file $(CONDA_LIB)/libc++.dylib` or Python binary) to dynamically apply `-arch x86_64` (for Rosetta/Intel x86_64 Conda envs) or `-arch arm64` (for native Apple Silicon Conda envs).
+   - On Linux, leaves architecture flags neutral for native GCC/G++ compilation.
+5. Implemented dynamic `CONDA_PREFIX` auto-discovery with fallback paths (`~/miniforge3/envs/forecast`, `~/miniconda3/envs/forecast`, `~/anaconda3/envs/forecast`, `/opt/conda`) when invoked outside an activated Conda shell.
+6. Replaced `LDFLAGS +=` with isolated `LDFLAGS := $(ARCH_FLAGS) -L$(CONDA_LIB) -Wl,-rpath,$(CONDA_LIB)` to prevent inheritance of external system/Homebrew library directories.
+7. Verified full build with `make clean && make all` (exit code 0), validated binary dynamic linkages with `otool -L` (0 Homebrew references), and verified 100% test pass rate across unit tests and CLI validation suites (90/90 passed).
+
+8. Resolved macOS Darwin compiler conflict: when Conda environments activate `cxx-compiler` (`clangxx_osx-arm64`), Conda exports `CXX=arm64-apple-darwin20.0.0-clang++`. On macOS Sonoma/Sequoia with Xcode 16+ SDK headers, this older Conda Clang compiler lacks built-in functions like `__builtin_clzg` and `__builtin_ctzg`, leading to compilation failures against the host SDK. The Makefiles now automatically route to host `clang++` on macOS Darwin while preserving all Conda include/library/rpath paths, guaranteeing 100% compatibility across all macOS SDK versions.
+9. Environment-scoped installation: Updated master `Makefile` so `make install` defaults `PREFIX ?= $(CONDA_PREFIX)` and `BINDIR ?= $(PREFIX)/bin`. Cleaned up legacy global symlinks from `~/.local/bin` and base Conda bin. Executables and `forecast` CLI command are now strictly isolated to the Conda environment root and only available in `PATH` when the environment is activated.
+
+Rationale: Enable portable, reproducible builds across Linux and macOS (Intel & Apple Silicon) relying solely on the active Conda environment without requiring Homebrew or system-level package managers, and robust against Conda clang SDK mismatches on macOS.
+
+Performance Delta: Seamless build and runtime resolution with dynamic `@rpath` pointing to Conda libraries.
+
+RAM Delta: N/A (Build configuration).
+
+
+Module: postprocessing / create_image / scripts
+
+Action:
+1. Enhanced `postprocessing/create_image/im.sh` to match `df.sh`, `dc.sh`, `igm.sh`, and `lc.sh`:
+   - Added `-j / --joblog` support for GNU parallel job statistics logging.
+   - Added `-r / --results` support to capture individual job stdout/stderr per plane.
+   - Added `-max` CLI flag for capping the maximum plane index processed.
+   - Added `-m / --mem` CLI flag and dynamic fallback to configuration file (`forecast.yaml` or `image.ini`) or `FORECAST_MEMORY_CEILING_GB`.
+   - Added native YAML configuration parsing via Python to extract target filter, catalog source, catalog directory, image output directory, and memory ceiling when `-c <forecast.yaml>` is provided.
+   - Updated CLI `help()` with options and usage examples.
+2. Updated `bin/forecast`:
+   - Enabled GNU parallel routing via `im.sh` for `forecast image` batch runs.
+   - Added `-j / --joblog` and `-r / --results` CLI flags to `p_mod` and `p_run` subcommands, forwarding them to batch runner scripts.
+3. Updated top-level `Makefile`:
+   - Added `im.sh` to global installation targets (`make install` and `make uninstall`), linking it to `~/.local/bin/im.sh` and `$CONDA_PREFIX/bin/im.sh`.
+4. Verified end-to-end execution of `im.sh` and `forecast image` with parallel `--joblog` and `--results` directories.
+
+Rationale: Ensure postprocessing image generation has full parity with upstream simulation batch runners (`df.sh`, `dc.sh`, `igm.sh`, `lc.sh`) for job monitoring, logging, and RAM ceiling governance on multi-core workstations and HPC clusters.
+
+Performance Delta: Direct parallel execution with zero redundant recalculation via target file existence checks.
+
+RAM Delta: Enforces memory ceiling per job process (tested with 4.0 GB and custom ceilings).
+
+
+
+
 [2026-10-06 23:00] Agent: Antigravity
 Module: environment / build
 

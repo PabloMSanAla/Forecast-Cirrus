@@ -6,23 +6,28 @@ help() {
           ~~~~~  FORECAST Image Generation Batch Processing Script  ~~~~~
 
 This script runs the create_image postprocessing module for multiple planes in parallel using GNU parallel.
-It dynamically extracts parameters (filter name, module, output directory, catalog directory, and planes list)
-from image.ini, checks if the target FITS output file already exists to avoid redundant computation,
-and verifies the input catalog exists before executing create_image.
+It dynamically extracts parameters (filter name, module, output directory, catalog directory, memory ceiling,
+and planes list) from image.ini or forecast.yaml, checks if the target FITS output file already exists to
+avoid redundant computation, and verifies that the input catalog exists before executing create_image.
 
 Usage: ./im.sh [options]
 
 Options:
   -n: Number of processors / concurrent jobs to use (default: 1)
   -i: Initial plane number to process (default: 0)
-  -lc: Path to the planes_list.txt file (default: from image.ini or ../../lc/planes_list.txt)
-  -ini: Path to the image.ini file (default: image.ini)
+  -max: Maximum plane number to process (default: highest plane in planes list)
+  -lc: Path to the planes_list.txt file (default: from config or ../../lc/planes_list.txt)
+  -ini, -c, --config: Path to configuration file (default: image.ini or forecast.yaml)
+  -m, --mem: Memory ceiling per job in GB (default: 4.0 or from configuration)
+  -j, --joblog: Path to file where GNU parallel logs job run statistics (e.g. parallel_image.log)
+  -r, --results: Directory path where stdout/stderr of each job is stored (e.g. image_logs/)
   -f, --force: Force recomputation even if output FITS file already exists
   -h, --help: Show this help message and exit
 
 Example usage:
   ./im.sh -n 4 -i 0
-  ./im.sh -n 4 -i 10 -f
+  ./im.sh -n 4 -i 0 -m 8.0 -j image_jobs.log -r image_logs/
+  ./im.sh -n 4 -i 0 -max 10 -c forecast.yaml -f
   ./im.sh -n 2 -ini /path/to/custom_image.ini
 
 EOF
@@ -30,9 +35,12 @@ EOF
 
 num_processors=1   # Default number of processors
 init_plane=0      # Default initial plane number
+max_plane_cli=""
 planes_list_path=""
 ini_file="image.ini"
-memory_ceiling_gb=4.0
+memory_ceiling_gb=""
+joblog_file=""
+results_dir=""
 force_run=false
 
 # Parse command-line arguments
@@ -50,6 +58,10 @@ while [[ $# -gt 0 ]]; do
             init_plane="$2"
             shift 2
             ;;
+        -max)
+            max_plane_cli="$2"
+            shift 2
+            ;;
         -lc)
             planes_list_path="$2"
             shift 2
@@ -60,6 +72,14 @@ while [[ $# -gt 0 ]]; do
             ;;
         -m|--mem)
             memory_ceiling_gb="$2"
+            shift 2
+            ;;
+        -j|--joblog)
+            joblog_file="$2"
+            shift 2
+            ;;
+        -r|--results)
+            results_dir="$2"
             shift 2
             ;;
         -f|--force)
@@ -79,42 +99,68 @@ if ! command -v parallel &> /dev/null; then
     exit 1
 fi
 
-# 1. Resolve image.ini path
+# 1. Resolve configuration file path (image.ini or forecast.yaml)
 if [ -n "$FORECAST_IMAGE_INI" ] && [ -f "$FORECAST_IMAGE_INI" ]; then
     ini_file="$FORECAST_IMAGE_INI"
-elif [ ! -f "$ini_file" ] && [ -f "postprocessing/create_image/image.ini" ]; then
-    ini_file="postprocessing/create_image/image.ini"
+elif [ -n "$FORECAST_CONFIG" ] && [ -f "$FORECAST_CONFIG" ] && [ "$ini_file" = "image.ini" ] && [ ! -f "$ini_file" ]; then
+    ini_file="$FORECAST_CONFIG"
+elif [ ! -f "$ini_file" ]; then
+    for cand in "forecast.yaml" "forecast.yml" "../forecast.yaml" "../../forecast.yaml" "postprocessing/create_image/image.ini"; do
+        if [ -f "$cand" ]; then
+            ini_file="$cand"
+            break
+        fi
+    done
 fi
 
 if [ ! -f "$ini_file" ]; then
-    echo "Error: image.ini configuration file not found at '$ini_file'."
+    echo "Error: Configuration file not found at '$ini_file'."
     exit 1
 fi
 
-# 2. Extract configuration from image.ini
-filter_name=$(awk '/!...FILTER_NAME_FROM_FILTER_FILE/{getline; print $1}' "$ini_file")
-module_name=$(awk '/!...MODULE_NAME_df_dc_OR_igm/{getline; print $1}' "$ini_file")
-output_dir=$(awk '/!...PATH_WHERE_TO_OUTPUT_RESULTS/{getline; print $1}' "$ini_file")
-cat_dir=$(awk '/!...PATH_WHERE_CATALOGUES_ARE_LOCATED/{getline; print $1}' "$ini_file")
+# 2. Extract configuration (supporting both YAML and legacy INI)
+if [[ "$ini_file" == *.yaml || "$ini_file" == *.yml ]]; then
+    filter_name=$(python3 -c "import yaml; cfg=yaml.safe_load(open('$ini_file')); print(cfg.get('modules', {}).get('create_image', {}).get('target_filter') or cfg.get('create_image', {}).get('target_filter', ''))" 2>/dev/null)
+    module_name=$(python3 -c "import yaml; cfg=yaml.safe_load(open('$ini_file')); print(cfg.get('modules', {}).get('create_image', {}).get('catalog_source') or cfg.get('create_image', {}).get('catalog_source', 'df'))" 2>/dev/null)
+    output_dir=$(python3 -c "import yaml; cfg=yaml.safe_load(open('$ini_file')); print(cfg.get('paths', {}).get('image_output_dir', ''))" 2>/dev/null)
+    cat_dir=$(python3 -c "import yaml; cfg=yaml.safe_load(open('$ini_file')); print(cfg.get('modules', {}).get('create_image', {}).get('catalog_dir') or cfg.get('create_image', {}).get('catalog_dir') or cfg.get('paths', {}).get('${module_name}_output_dir', ''))" 2>/dev/null)
+    yaml_mem=$(python3 -c "import yaml; cfg=yaml.safe_load(open('$ini_file')); print(cfg.get('execution', {}).get('memory_ceiling_gb', ''))" 2>/dev/null)
+    if [ -z "$memory_ceiling_gb" ] && [ -n "$yaml_mem" ]; then
+        memory_ceiling_gb="$yaml_mem"
+    fi
+else
+    filter_name=$(awk '/!...FILTER_NAME_FROM_FILTER_FILE/{getline; print $1}' "$ini_file")
+    module_name=$(awk '/!...MODULE_NAME_df_dc_OR_igm/{getline; print $1}' "$ini_file")
+    output_dir=$(awk '/!...PATH_WHERE_TO_OUTPUT_RESULTS/{getline; print $1}' "$ini_file")
+    cat_dir=$(awk '/!...PATH_WHERE_CATALOGUES_ARE_LOCATED/{getline; print $1}' "$ini_file")
+    ini_mem=$(awk '/!...MEMORY_CEILING_GB/{getline; print $1}' "$ini_file")
+    if [ -z "$memory_ceiling_gb" ] && [ -n "$ini_mem" ]; then
+        memory_ceiling_gb="$ini_mem"
+    fi
+fi
+
+[ -z "$module_name" ] && module_name="df"
+if [ -z "$memory_ceiling_gb" ]; then
+    if [ -n "$FORECAST_MEMORY_CEILING_GB" ]; then
+        memory_ceiling_gb="$FORECAST_MEMORY_CEILING_GB"
+    else
+        memory_ceiling_gb="4.0"
+    fi
+fi
 
 if [ -z "$filter_name" ]; then
-    echo "Error: FILTER_NAME_FROM_FILTER_FILE not found in '$ini_file'."
-    exit 1
-fi
-
-if [ -z "$module_name" ]; then
-    echo "Error: MODULE_NAME_df_dc_OR_igm not found in '$ini_file'."
+    echo "Error: Target filter not found in '$ini_file'."
     exit 1
 fi
 
 if [ -z "$output_dir" ]; then
-    echo "Error: PATH_WHERE_TO_OUTPUT_RESULTS not found in '$ini_file'."
+    echo "Error: Image output directory not found in '$ini_file'."
     exit 1
 fi
 [[ "$output_dir" != */ ]] && output_dir="${output_dir}/"
 
 if [ -z "$cat_dir" ]; then
-    echo "Error: PATH_WHERE_CATALOGUES_ARE_LOCATED not found in '$ini_file'."
+    echo "Error: Catalog directory not found in '$ini_file'."
     exit 1
 fi
 [[ "$cat_dir" != */ ]] && cat_dir="${cat_dir}/"
@@ -123,19 +169,18 @@ fi
 if [ -z "$planes_list_path" ]; then
     if [ -n "$FORECAST_PLANES_LIST" ] && [ -f "$FORECAST_PLANES_LIST" ]; then
         planes_list_path="$FORECAST_PLANES_LIST"
+    elif [[ "$ini_file" == *.yaml || "$ini_file" == *.yml ]]; then
+        planes_list_path=$(python3 -c "import yaml; cfg=yaml.safe_load(open('$ini_file')); print(cfg.get('geometry', {}).get('planes_list_file', ''))" 2>/dev/null)
     elif [ -f "$ini_file" ]; then
         planes_list_path=$(awk '/!...PLANES_LIST_FILE/{getline; print $1}' "$ini_file")
     fi
     if [ -z "$planes_list_path" ] || [ ! -f "$planes_list_path" ]; then
-        if [ -f "../../lc/planes_list.txt" ]; then
-            planes_list_path="../../lc/planes_list.txt"
-        elif [ -f "../lc/planes_list.txt" ]; then
-            planes_list_path="../lc/planes_list.txt"
-        elif [ -f "lc/planes_list.txt" ]; then
-            planes_list_path="lc/planes_list.txt"
-        elif [ -f "planes_list.txt" ]; then
-            planes_list_path="planes_list.txt"
-        fi
+        for cand_pl in "lc/planes_list.txt" "../lc/planes_list.txt" "../../lc/planes_list.txt" "planes_list.txt"; do
+            if [ -f "$cand_pl" ]; then
+                planes_list_path="$cand_pl"
+                break
+            fi
+        done
     fi
 fi
 
@@ -155,9 +200,12 @@ do
 done
 
 max_planes=$(printf "%s\n" "${planes[@]}" | sort -nr | head -n 1)
+if [ -n "$max_plane_cli" ]; then
+    max_planes="$max_plane_cli"
+fi
 
 echo "Configuration:"
-echo "  Ini file:     $ini_file"
+echo "  Config file:  $ini_file"
 echo "  Filter:       $filter_name"
 echo "  Module:       $module_name"
 echo "  Catalog dir:  $cat_dir"
@@ -165,8 +213,21 @@ echo "  Output dir:   $output_dir"
 echo "  Planes list:  $planes_list_path"
 echo "  Processors:   $num_processors"
 echo "  Plane range:  $init_plane to $max_planes"
+echo "  Memory limit: ${memory_ceiling_gb} GB"
+[ -n "$joblog_file" ] && echo "  Job log:      $joblog_file"
+[ -n "$results_dir" ] && echo "  Results dir:  $results_dir"
 echo "  Force rerun:  $force_run"
 echo ""
+
+# Assemble extra GNU parallel arguments
+parallel_args=()
+if [ -n "$joblog_file" ]; then
+    parallel_args+=(--joblog "$joblog_file")
+fi
+if [ -n "$results_dir" ]; then
+    mkdir -p "$results_dir"
+    parallel_args+=(--results "$results_dir")
+fi
 
 # Function to run create_image with existence check
 run_im() {
@@ -195,7 +256,7 @@ run_im() {
         return 0
     fi
 
-    echo "Processing image for snapshot: $snapshot, plane: $plane -> $expected_output"
+    echo "Processing image for snapshot: $snapshot, plane: $plane (memory ceiling: ${mem_limit:-4.0} GB) -> $expected_output"
     
     local flag="-ini"
     [[ "$ini_path" == *.yaml || "$ini_path" == *.yml ]] && flag="-c"
@@ -209,6 +270,13 @@ run_im() {
         exe="postprocessing/create_image/create_image"
     elif [ -x "../create_image" ]; then
         exe="../create_image"
+    elif [ -x "../../postprocessing/create_image/create_image" ]; then
+        exe="../../postprocessing/create_image/create_image"
+    fi
+
+    if [ -z "$exe" ]; then
+        echo "Error: create_image executable not found."
+        return 1
     fi
 
     "${exe}" "${snapshot}" "${plane}" "${mem_limit:-4.0}" "${flag}" "${ini_path}"
@@ -229,5 +297,6 @@ do
     if [[ "${planes[$i]}" -ge "$init_plane" && "${planes[$i]}" -le "$max_planes" ]]; then
         echo "${snaps[$i]} ${planes[$i]} ${output_dir} ${cat_dir} ${filter_name} ${module_name} ${force_run} ${ini_file} ${memory_ceiling_gb}"
     fi
-done | parallel --bar --jobs "$num_processors" --colsep ' ' run_im {1} {2} {3} {4} {5} {6} {7} {8} {9}
+done | parallel --bar --jobs "$num_processors" "${parallel_args[@]}" --colsep ' ' run_im {1} {2} {3} {4} {5} {6} {7} {8} {9}
+
 

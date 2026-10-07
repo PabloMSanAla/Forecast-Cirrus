@@ -1,32 +1,68 @@
-BREW_PREFIX ?= $(shell brew --prefix 2>/dev/null || echo /opt/homebrew)
+# Executable name
+PROG = ./make_lc_plane
+
+MAIN = make_lc_plane.cpp
+
+# Conda paths (dynamically grabbed from active environment)
 CONDA_PREFIX ?= $(shell echo "$$CONDA_PREFIX")
-
-CXX := clang++
-CXXFLAGS := -std=c++17 -O2 -g
-
-CPPFLAGS := -I../../common
-LDFLAGS :=
-
-# Prefer Homebrew on macOS if present, otherwise fallback to Conda
-ifneq ($(wildcard $(BREW_PREFIX)/include/.*),)
-CPPFLAGS += -I$(BREW_PREFIX)/include
-LDFLAGS += -L$(BREW_PREFIX)/lib -Wl,-rpath,$(BREW_PREFIX)/lib
-else ifneq ($(CONDA_PREFIX),)
-CPPFLAGS += -I$(CONDA_PREFIX)/include
-LDFLAGS += -L$(CONDA_PREFIX)/lib -Wl,-rpath,$(CONDA_PREFIX)/lib
+ifeq ($(wildcard $(CONDA_PREFIX)/include/yaml-cpp),)
+  ifneq ($(wildcard $(HOME)/miniforge3/envs/forecast/include/yaml-cpp),)
+    CONDA_PREFIX = $(HOME)/miniforge3/envs/forecast
+  else ifneq ($(wildcard $(HOME)/miniconda3/envs/forecast/include/yaml-cpp),)
+    CONDA_PREFIX = $(HOME)/miniconda3/envs/forecast
+  else ifneq ($(wildcard $(HOME)/anaconda3/envs/forecast/include/yaml-cpp),)
+    CONDA_PREFIX = $(HOME)/anaconda3/envs/forecast
+  else ifneq ($(wildcard /opt/conda/include/yaml-cpp),)
+    CONDA_PREFIX = /opt/conda
+  endif
 endif
 
-LIBS := -lyaml-cpp
+ifeq ($(CONDA_PREFIX),)
+$(error CONDA_PREFIX is not set. Please activate your Conda environment: conda activate forecast)
+endif
 
-PROG := make_lc_plane
-SRCS := make_lc_plane.cpp
+CONDA_INC = $(CONDA_PREFIX)/include
+CONDA_LIB = $(CONDA_PREFIX)/lib
+
+# Core Compiler and Standard Settings
+UNAME_S := $(shell uname -s)
+ifeq ($(UNAME_S),Darwin)
+  # On macOS, use host clang++ to match host SDK headers and avoid Conda's clang/libc++ mismatch (__builtin_clzg)
+  ifeq ($(findstring apple-darwin,$(CXX)),apple-darwin)
+    CXX := clang++
+  else ifeq ($(origin CXX),default)
+    CXX := clang++
+  endif
+  CXXFLAGS := -std=c++17 -O2 -Wall
+
+  CONDA_ARCH := $(shell file $(CONDA_LIB)/libc++.dylib 2>/dev/null | grep -q "x86_64" && echo "x86_64" || (file $(CONDA_LIB)/libc++.dylib 2>/dev/null | grep -q "arm64" && echo "arm64"))
+  ifeq ($(CONDA_ARCH),)
+    CONDA_ARCH := $(shell file $(CONDA_PREFIX)/bin/python 2>/dev/null | grep -q "x86_64" && echo "x86_64" || (file $(CONDA_PREFIX)/bin/python 2>/dev/null | grep -q "arm64" && echo "arm64"))
+  endif
+  ifneq ($(CONDA_ARCH),)
+    ARCH_FLAGS ?= -arch $(CONDA_ARCH)
+  endif
+else
+  CXX ?= g++
+  CXXFLAGS ?= -std=c++17 -O2 -Wall
+endif
+
+CPPFLAGS = $(ARCH_FLAGS) -I$(CONDA_INC) -I../../common -I./
+
+# Linker Flags (Tells the loader to find libraries inside Conda at runtime)
+LDFLAGS := $(ARCH_FLAGS) -L$(CONDA_LIB) -Wl,-rpath,$(CONDA_LIB)
+
+# Libraries
+LIBS = -lyaml-cpp -lm
+
+RM = rm -f -r
 
 default: $(PROG)
 
-$(PROG): $(SRCS)
-	$(CXX) $(CXXFLAGS) $(CPPFLAGS) $(SRCS) $(LDFLAGS) $(LIBS) -o $(PROG)
+$(PROG): $(MAIN)
+	$(CXX) $(CXXFLAGS) $(CPPFLAGS) $(MAIN) $(LDFLAGS) $(LIBS) -o $(PROG)
 
 clean:
-	rm -f $(PROG) *.o *~
+	$(RM) $(PROG) *.o *~ *.dSYM
 
 .PHONY: default clean

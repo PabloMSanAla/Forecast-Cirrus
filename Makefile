@@ -1,6 +1,21 @@
 # Top-level Makefile for FORECAST pipeline
 
-PREFIX ?= $(HOME)/.local
+# Conda paths (dynamically grabbed from active environment with fallbacks)
+CONDA_PREFIX ?= $(shell echo "$$CONDA_PREFIX")
+ifeq ($(wildcard $(CONDA_PREFIX)/include/H5Cpp.h),)
+  ifneq ($(wildcard $(HOME)/miniforge3/envs/forecast/include/H5Cpp.h),)
+    CONDA_PREFIX = $(HOME)/miniforge3/envs/forecast
+  else ifneq ($(wildcard $(HOME)/miniconda3/envs/forecast/include/H5Cpp.h),)
+    CONDA_PREFIX = $(HOME)/miniconda3/envs/forecast
+  else ifneq ($(wildcard $(HOME)/anaconda3/envs/forecast/include/H5Cpp.h),)
+    CONDA_PREFIX = $(HOME)/anaconda3/envs/forecast
+  else ifneq ($(wildcard /opt/conda/include/H5Cpp.h),)
+    CONDA_PREFIX = /opt/conda
+  endif
+endif
+export CONDA_PREFIX
+
+PREFIX ?= $(CONDA_PREFIX)
 BINDIR ?= $(PREFIX)/bin
 
 .PHONY: all clean lc df dc igm create_image make_lc_plane cli install uninstall docs html test help
@@ -29,8 +44,13 @@ cli:
 	chmod +x bin/forecast 2>/dev/null || true
 
 install: all
+	@if [ -z "$(CONDA_PREFIX)" ] || [ ! -d "$(CONDA_PREFIX)" ]; then \
+		echo "Error: CONDA_PREFIX is not set or not a valid directory."; \
+		echo "Please activate your Conda environment (e.g. 'conda activate forecast') before running 'make install'."; \
+		exit 1; \
+	fi
 	@mkdir -p $(BINDIR)
-	@echo "Installing FORECAST CLI and tools to $(BINDIR)..."
+	@echo "Installing FORECAST CLI and tools into Conda environment: $(BINDIR)..."
 	ln -sf $(CURDIR)/bin/forecast $(BINDIR)/forecast
 	ln -sf $(CURDIR)/lc/executable_lc $(BINDIR)/executable_lc
 	ln -sf $(CURDIR)/df/executable_df $(BINDIR)/executable_df
@@ -39,26 +59,21 @@ install: all
 	ln -sf $(CURDIR)/postprocessing/create_image/create_image $(BINDIR)/create_image
 	ln -sf $(CURDIR)/tools/make_lc_plane/make_lc_plane $(BINDIR)/make_lc_plane
 	ln -sf $(CURDIR)/forecast.sh $(BINDIR)/forecast.sh
-	@if [ -n "$$CONDA_PREFIX" ] && [ -d "$$CONDA_PREFIX/bin" ] && [ "$$CONDA_PREFIX/bin" != "$(BINDIR)" ]; then \
-		echo "Also linking into Conda environment: $$CONDA_PREFIX/bin"; \
-		ln -sf $(CURDIR)/bin/forecast "$$CONDA_PREFIX/bin/forecast"; \
-		ln -sf $(CURDIR)/lc/executable_lc "$$CONDA_PREFIX/bin/executable_lc"; \
-		ln -sf $(CURDIR)/df/executable_df "$$CONDA_PREFIX/bin/executable_df"; \
-		ln -sf $(CURDIR)/dc/executable_dc "$$CONDA_PREFIX/bin/executable_dc"; \
-		ln -sf $(CURDIR)/igm/executable_igm "$$CONDA_PREFIX/bin/executable_igm"; \
-		ln -sf $(CURDIR)/postprocessing/create_image/create_image "$$CONDA_PREFIX/bin/create_image"; \
-		ln -sf $(CURDIR)/tools/make_lc_plane/make_lc_plane "$$CONDA_PREFIX/bin/make_lc_plane"; \
-		ln -sf $(CURDIR)/forecast.sh "$$CONDA_PREFIX/bin/forecast.sh"; \
-	fi
-	@echo "Installation complete. 'forecast' and module executables are now available in your PATH."
+	ln -sf $(CURDIR)/postprocessing/create_image/im.sh $(BINDIR)/im.sh
+	@# Clean up legacy symlinks from ~/.local/bin so tools are only active when Conda is active
+	@rm -f $(HOME)/.local/bin/forecast $(HOME)/.local/bin/executable_lc $(HOME)/.local/bin/executable_df \
+	       $(HOME)/.local/bin/executable_dc $(HOME)/.local/bin/executable_igm $(HOME)/.local/bin/create_image \
+	       $(HOME)/.local/bin/make_lc_plane $(HOME)/.local/bin/forecast.sh $(HOME)/.local/bin/im.sh 2>/dev/null || true
+	@echo "Installation complete."
+	@echo "FORECAST CLI and tools are installed into $(BINDIR) and active in PATH only when this Conda environment is activated."
 
 uninstall:
 	@echo "Uninstalling FORECAST CLI tools from $(BINDIR)..."
-	rm -f $(BINDIR)/forecast $(BINDIR)/executable_lc $(BINDIR)/executable_df $(BINDIR)/executable_dc $(BINDIR)/executable_igm $(BINDIR)/create_image $(BINDIR)/make_lc_plane $(BINDIR)/forecast.sh
-	@if [ -n "$$CONDA_PREFIX" ] && [ -d "$$CONDA_PREFIX/bin" ] && [ "$$CONDA_PREFIX/bin" != "$(BINDIR)" ]; then \
-		echo "Removing from Conda environment: $$CONDA_PREFIX/bin"; \
-		rm -f "$$CONDA_PREFIX/bin/forecast" "$$CONDA_PREFIX/bin/executable_lc" "$$CONDA_PREFIX/bin/executable_df" "$$CONDA_PREFIX/bin/executable_dc" "$$CONDA_PREFIX/bin/executable_igm" "$$CONDA_PREFIX/bin/create_image" "$$CONDA_PREFIX/bin/make_lc_plane" "$$CONDA_PREFIX/bin/forecast.sh"; \
-	fi
+	rm -f $(BINDIR)/forecast $(BINDIR)/executable_lc $(BINDIR)/executable_df $(BINDIR)/executable_dc \
+	      $(BINDIR)/executable_igm $(BINDIR)/create_image $(BINDIR)/make_lc_plane $(BINDIR)/forecast.sh $(BINDIR)/im.sh
+	@rm -f $(HOME)/.local/bin/forecast $(HOME)/.local/bin/executable_lc $(HOME)/.local/bin/executable_df \
+	       $(HOME)/.local/bin/executable_dc $(HOME)/.local/bin/executable_igm $(HOME)/.local/bin/create_image \
+	       $(HOME)/.local/bin/make_lc_plane $(HOME)/.local/bin/forecast.sh $(HOME)/.local/bin/im.sh 2>/dev/null || true
 	@echo "Uninstallation complete."
 
 clean:

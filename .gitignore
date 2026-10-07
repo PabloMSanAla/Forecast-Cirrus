@@ -3,3 +3,5 @@
 docs/_build/
 docs/_doxygen/
 *.dSYM/
+TEST*.md
+validation_report.md

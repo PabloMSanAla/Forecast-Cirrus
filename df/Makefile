@@ -1,60 +1,74 @@
-#############################################################################
-# Makefile adapted for macOS Homebrew (Apple Silicon)
-# - Uses Homebrew prefix for includes/libs
-# - Uses clang++ by default and macOS Accelerate framework for BLAS/LAPACK
-#############################################################################
-
-# executable name
+# Executable name
 PROG = ./executable_df
 
 MAIN = main_df.cpp readTNGParticle.cpp SED.cpp functions.cpp
 
-# Detect Homebrew and Conda prefixes
-BREW_PREFIX ?= $(shell brew --prefix 2>/dev/null || echo /opt/homebrew)
+# Conda paths (dynamically grabbed from active environment)
 CONDA_PREFIX ?= $(shell echo "$$CONDA_PREFIX")
-
-CXX := clang++
-CXXFLAGS := -std=c++17 -O2 -g
-
-# Include paths
-CPPFLAGS := -I../common
-LDFLAGS :=
-
-# Prefer Homebrew on macOS if present, otherwise fallback to Conda
-ifneq ($(wildcard $(BREW_PREFIX)/include/.*),)
-CPPFLAGS += -I$(BREW_PREFIX)/include -I$(BREW_PREFIX)/include/eigen3
-LDFLAGS += -L$(BREW_PREFIX)/lib -Wl,-rpath,$(BREW_PREFIX)/lib
-else ifneq ($(CONDA_PREFIX),)
-CPPFLAGS += -I$(CONDA_PREFIX)/include -I$(CONDA_PREFIX)/include/eigen3
-LDFLAGS += -L$(CONDA_PREFIX)/lib -Wl,-rpath,$(CONDA_PREFIX)/lib
+ifeq ($(wildcard $(CONDA_PREFIX)/include/H5Cpp.h),)
+  ifneq ($(wildcard $(HOME)/miniforge3/envs/forecast/include/H5Cpp.h),)
+    CONDA_PREFIX = $(HOME)/miniforge3/envs/forecast
+  else ifneq ($(wildcard $(HOME)/miniconda3/envs/forecast/include/H5Cpp.h),)
+    CONDA_PREFIX = $(HOME)/miniconda3/envs/forecast
+  else ifneq ($(wildcard $(HOME)/anaconda3/envs/forecast/include/H5Cpp.h),)
+    CONDA_PREFIX = $(HOME)/anaconda3/envs/forecast
+  else ifneq ($(wildcard /opt/conda/include/H5Cpp.h),)
+    CONDA_PREFIX = /opt/conda
+  endif
 endif
 
-CPPFLAGS += -I./
+ifeq ($(CONDA_PREFIX),)
+$(error CONDA_PREFIX is not set. Please activate your Conda environment: conda activate forecast)
+endif
 
-# Libraries: prefer Homebrew/Conda libs; use Accelerate for BLAS/LAPACK on macOS
-LIBS := -lyaml-cpp -lgsl -lgslcblas -lcfitsio -lCCfits -lfftw3 -larmadillo -lhdf5 -lhdf5_cpp -lm -framework Accelerate
+CONDA_INC = $(CONDA_PREFIX)/include
+CONDA_LIB = $(CONDA_PREFIX)/lib
 
-# Default target
+# Core Compiler and Standard Settings
+UNAME_S := $(shell uname -s)
+ifeq ($(UNAME_S),Darwin)
+  # On macOS, use host clang++ to match host SDK headers and avoid Conda's clang/libc++ mismatch (__builtin_clzg)
+  ifeq ($(findstring apple-darwin,$(CXX)),apple-darwin)
+    CXX := clang++
+  else ifeq ($(origin CXX),default)
+    CXX := clang++
+  endif
+  CXXFLAGS := -std=c++17 -O2 -Wall
+
+  CONDA_ARCH := $(shell file $(CONDA_LIB)/libc++.dylib 2>/dev/null | grep -q "x86_64" && echo "x86_64" || (file $(CONDA_LIB)/libc++.dylib 2>/dev/null | grep -q "arm64" && echo "arm64"))
+  ifeq ($(CONDA_ARCH),)
+    CONDA_ARCH := $(shell file $(CONDA_PREFIX)/bin/python 2>/dev/null | grep -q "x86_64" && echo "x86_64" || (file $(CONDA_PREFIX)/bin/python 2>/dev/null | grep -q "arm64" && echo "arm64"))
+  endif
+  ifneq ($(CONDA_ARCH),)
+    ARCH_FLAGS ?= -arch $(CONDA_ARCH)
+  endif
+else
+  CXX ?= g++
+  CXXFLAGS ?= -std=c++17 -O2 -Wall
+endif
+
+CPPFLAGS = $(ARCH_FLAGS) -I$(CONDA_INC) -I$(CONDA_INC)/eigen3 -I../common -I./
+
+# Linker Flags (Tells the loader to find libraries inside Conda at runtime)
+LDFLAGS := $(ARCH_FLAGS) -L$(CONDA_LIB) -Wl,-rpath,$(CONDA_LIB)
+
+# Explicit dependencies from Conda
+LIBS = -lyaml-cpp \
+       -larmadillo -lopenblas -llapack \
+       -lgsl -lgslcblas \
+       -lcfitsio -lCCfits \
+       -lfftw3 -lm \
+       -lhdf5 -lhdf5_cpp
+
+RM = rm -f -r
+
 default: main
 
 main:
 	$(CXX) $(CXXFLAGS) $(CPPFLAGS) $(MAIN) $(LDFLAGS) $(LIBS) -o $(PROG)
 
-# Check Homebrew and expected libraries
-# Run `make -C df check` to verify common dependencies installed via Homebrew
-check:
-	@echo "Homebrew prefix: $(BREW_PREFIX)"
-	@test -d "$(BREW_PREFIX)" || (echo "Homebrew not found at $(BREW_PREFIX). Install Homebrew."; exit 1)
-	@missing=""
-	@for lib in libgsl libfftw3 libhdf5 libarmadillo libcfitsio libCCfits; do \
-	  if ls $(BREW_PREFIX)/lib/$$lib*.dylib > /dev/null 2>&1 || ls $(BREW_PREFIX)/lib/$$lib*.a > /dev/null 2>&1; then \
-	    echo "$$lib: found"; \
-	  else \
-	    echo "$$lib: MISSING"; missing="yes"; \
-	  fi; \
-	done; \
-	if [ -n "$$missing" ]; then echo "Some libraries missing. Install via Homebrew, e.g.: brew install gsl fftw hdf5 armadillo cfitsio ccfits"; exit 1; fi
-
 clean:
-	rm -f $(PROG) *.o *~
+	$(RM) $(PROG) *.o *~ *.dSYM
+
+.PHONY: default main clean
 

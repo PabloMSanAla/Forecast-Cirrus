@@ -1,7 +1,6 @@
 name: forecast
 channels:
   - conda-forge
-  - defaults
 
 dependencies:
   # Universal C/C++ Toolchain (Conda solver automatically selects clang on macOS, g++ on Linux)
