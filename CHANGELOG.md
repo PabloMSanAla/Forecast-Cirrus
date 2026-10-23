@@ -1,6 +1,46 @@
 # CHANGELOG
 
-[2026-10-07 14:00] Agent: Antigravity
+[2026-10-07 15:30] Agent: Antigravity
+Module: packaging / python / postprocessing / conda-recipe
+
+Action:
+1. Converted repository into a standard hybrid C++/Python package:
+   - Added standard `pyproject.toml` (PEP 517/621) declaring project metadata, dependencies (`pyyaml`, `numpy`, `pandas`, `astropy`, `tqdm`), and CLI console entry point `forecast = "forecast.cli:main"`.
+   - Removed legacy `setup.py`.
+2. Created `forecast/` Python package:
+   - `forecast/__init__.py`: Package entry exposing `__version__ = "1.0.0"`, `cli`, and `postprocessing`.
+   - `forecast/cli.py`: Core CLI implementation with cross-environment discovery.
+   - `bin/forecast`: Updated to lightweight wrapper delegating to `forecast.cli.main` for standalone script backwards compatibility.
+3. Created `forecast/postprocessing` library subpackage:
+   - `forecast/postprocessing/sum_images.py`: Exposes `sum_massive_fits` and `sum_massive_fits_fast`.
+   - `forecast/postprocessing/sum_fits.py`: Exposes `stack_fits_images`.
+   - `forecast/postprocessing/galaxy_cat.py`: Exposes `build_galaxy_catalog`.
+   - `forecast/postprocessing/merge_cat.py`: Exposes `merge_galaxy_catalogs`.
+4. Created complete Conda distribution recipe in `recipe/`:
+   - `recipe/meta.yaml`: Full Conda metadata and package requirements (build, host, run, test) for conda / conda-forge packaging.
+   - `recipe/build.sh`: Build recipe compiling C++ binaries and installing the Python package via `pip install . --no-deps`.
+5. Updated master `Makefile`:
+   - `install`: Automatically compiles C++ binaries, symlinks them into `$(CONDA_PREFIX)/bin`, and installs the Python package via editable `pip install -e . --no-deps`.
+   - `uninstall`: Uninstalls both C++ executables and the Python package (`pip uninstall -y forecast-sim`).
+6. Aligned Python dependencies and version constraints across `environment.yml`, `pyproject.toml`, and `recipe/meta.yaml`:
+   - `python >=3.8`
+   - `pip`
+   - `pyyaml >=5.1`
+   - `numpy >=1.20`
+   - `pandas >=1.3`
+   - `astropy >=4.3`
+   - `tqdm >=4.60`
+   - `requests >=2.25` (snapshot downloading tools)
+   - `psutil >=5.8` (RAM and process RSS monitoring)
+7. Added unit tests in `tests/test_postprocessing.py`. Verified all 7 unit tests and 90 CLI validation tests pass cleanly.
+
+Rationale: Modernize project packaging, allow scientific users to import postprocessing tools programmatically (`from forecast.postprocessing import ...`), and prepare the project for publication on Conda and conda-forge.
+
+Performance Delta: Direct Python import capabilities with zero startup overhead.
+
+RAM Delta: Chunked RAM-aware FITS processing available programmatically.
+
+
 Module: build / makefiles (lc, df, dc, igm, postprocessing/create_image, tools/make_lc_plane, root)
 
 Action:

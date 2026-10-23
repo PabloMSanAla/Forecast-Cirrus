@@ -5,3 +5,5 @@ docs/_doxygen/
 *.dSYM/
 TEST*.md
 validation_report.md
+*.pyc
+.DS_Store

@@ -10,9 +10,16 @@ dependencies:
   - cmake
   - parallel
 
-  # Python & CLI Requirements
+  # Python, CLI & Postprocessing Requirements
   - python >=3.8
+  - pip
   - pyyaml >=5.1
+  - numpy >=1.20
+  - pandas >=1.3
+  - astropy >=4.3
+  - tqdm >=4.60
+  - requests >=2.25
+  - psutil >=5.8
 
   # Core Linear Algebra & Math Libraries
   - gsl

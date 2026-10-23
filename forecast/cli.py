@@ -1,0 +1,528 @@
+#!/usr/bin/env python3
+"""
+FORECAST - Unified Command-Line Interface
+Comprehensive CLI tool to manage, configure, run, and post-process
+the FORECAST cosmological lightcone synthesis pipeline.
+"""
+
+import os
+import sys
+import argparse
+import subprocess
+import yaml
+from pathlib import Path
+
+DEFAULT_CONFIG_FILES = [
+    "forecast.yaml",
+    "forecast.yml",
+    "../forecast.yaml",
+    "../../forecast.yaml",
+]
+
+def find_project_root():
+    """Locate the root directory of the FORECAST project."""
+    # 1. Check environment variables
+    for env_var in ["FORECAST_DIR", "FORECAST_ROOT"]:
+        val = os.environ.get(env_var)
+        if val and os.path.isdir(val) and (Path(val) / "lc").is_dir():
+            return Path(val).resolve()
+
+    # 2. Check script directory or symlink target
+    resolved = Path(__file__).resolve()
+    current = resolved.parent
+    if (current.parent / "lc").is_dir():
+        return current.parent
+    if (current / "lc").is_dir():
+        return current
+
+    # 3. Known repository fallback
+    repo_default = Path("/Users/pmsanch1/code/FORECAST")
+    if repo_default.is_dir() and (repo_default / "lc").is_dir():
+        return repo_default
+
+    return current
+
+PROJECT_ROOT = find_project_root()
+os.environ.setdefault("FORECAST_DIR", str(PROJECT_ROOT))
+os.environ.setdefault("FORECAST_ROOT", str(PROJECT_ROOT))
+
+def resolve_config_path(cli_path=None):
+    """Resolve the YAML configuration file path."""
+    if cli_path and os.path.isfile(cli_path):
+        return Path(cli_path).resolve()
+    
+    env_cfg = os.environ.get("FORECAST_CONFIG")
+    if env_cfg and os.path.isfile(env_cfg):
+        return Path(env_cfg).resolve()
+
+    for candidate in DEFAULT_CONFIG_FILES:
+        p = (Path.cwd() / candidate).resolve()
+        if p.is_file():
+            return p
+        p_root = (PROJECT_ROOT / candidate).resolve()
+        if p_root.is_file():
+            return p_root
+
+    return None
+
+def load_config(config_path):
+    """Load configuration from YAML file."""
+    if not config_path or not os.path.isfile(config_path):
+        raise FileNotFoundError(f"Configuration file not found: {config_path}")
+    
+    with open(config_path, "r") as f:
+        cfg = yaml.safe_load(f)
+    if not isinstance(cfg, dict):
+        raise ValueError(f"Invalid YAML configuration format in {config_path}")
+    return cfg
+
+def find_executable(name, subpath=""):
+    """Find executable binary in PATH, bin/, root, or submodule directory."""
+    # 1. Check PATH first
+    which_exe = shutil_which(name)
+    if which_exe and os.access(which_exe, os.X_OK):
+        return str(Path(which_exe).resolve())
+
+    # 2. Check in directory containing this script
+    script_dir = Path(__file__).resolve().parent
+    if (script_dir / name).is_file() and os.access(script_dir / name, os.X_OK):
+        return str((script_dir / name).resolve())
+
+    # 3. Check candidates in PROJECT_ROOT and CWD
+    candidates = [
+        PROJECT_ROOT / "bin" / name,
+        PROJECT_ROOT / name,
+        Path.cwd() / "bin" / name,
+        Path.cwd() / name,
+    ]
+    if subpath:
+        candidates.append(PROJECT_ROOT / subpath / name)
+        candidates.append(Path.cwd() / subpath / name)
+
+    for c in candidates:
+        if c.is_file() and os.access(c, os.X_OK):
+            return str(c.resolve())
+    return None
+
+def parse_planes_list(planes_list_path, min_plane=0, max_plane=None):
+    """Parse (snapshot, plane_number) tuples from planes_list.txt."""
+    if not os.path.isfile(planes_list_path):
+        raise FileNotFoundError(f"Planes list file not found: {planes_list_path}")
+    
+    planes = []
+    with open(planes_list_path, "r") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            parts = line.split()
+            if len(parts) >= 6:
+                try:
+                    plane_num = int(parts[4])
+                    snap_num = int(parts[5])
+                    if plane_num >= min_plane:
+                        if max_plane is None or plane_num <= max_plane:
+                            planes.append((snap_num, plane_num))
+                except ValueError:
+                    continue
+    return planes
+
+def cmd_check(args):
+    """Check configuration and environment validity."""
+    config_path = resolve_config_path(args.config)
+    if not config_path:
+        print(f"[ERROR] No forecast.yaml configuration file found.")
+        print(f"        Please provide one with -c <path> or run from project root.")
+        sys.exit(1)
+
+    print(f"============================================================")
+    print(f"             FORECAST Pipeline Environment Check             ")
+    print(f"============================================================")
+    print(f"Config path:  {config_path}")
+    cfg = load_config(config_path)
+
+    sim = cfg.get("simulation", {})
+    sps = cfg.get("sps", {})
+    geom = cfg.get("geometry", {})
+    paths = cfg.get("paths", {})
+
+    all_ok = True
+
+    # Check key files
+    checks = [
+        ("Snapshots directory", sim.get("snapshots_dir"), True),
+        ("Snapshots list", sim.get("snaplist_file"), False),
+        ("Redshift list", sim.get("redshift_list_file"), False),
+        ("Comoving distances", sim.get("comoving_distances_file"), False),
+        ("BC03 directory", sps.get("bc03_dir"), True),
+        ("Filters file", sps.get("filters_file"), False),
+        ("Planes list", geom.get("planes_list_file"), False),
+    ]
+
+    for label, path, is_dir in checks:
+        if not path:
+            print(f"  [MISSING CONFIG] {label}: not set")
+            all_ok = False
+        else:
+            resolved_p = Path(path)
+            if not resolved_p.is_absolute() and not resolved_p.exists():
+                resolved_p = PROJECT_ROOT / path
+            if (is_dir and resolved_p.is_dir()) or (not is_dir and resolved_p.is_file()):
+                print(f"  [OK]  {label}: {path}")
+            else:
+                print(f"  [WARN] {label}: {path} (not found on disk)")
+
+    # Check executables
+    executables = [
+        ("executable_lc", "lc"),
+        ("executable_df", "df"),
+        ("executable_dc", "dc"),
+        ("executable_igm", "igm"),
+        ("create_image", "postprocessing/create_image"),
+        ("make_lc_plane", "tools/make_lc_plane"),
+    ]
+    print(f"\nChecking Executables:")
+    for exe, sub in executables:
+        found = find_executable(exe, sub)
+        if found:
+            print(f"  [OK]  {exe}: {found}")
+        else:
+            print(f"  [FAIL] {exe}: NOT FOUND. Run 'make all' to build.")
+            all_ok = False
+
+    print(f"============================================================")
+    if all_ok:
+        print("Pipeline configuration is READY.")
+    else:
+        print("Pipeline has warnings or missing components.")
+
+def cmd_planes(args):
+    """Generate lightcone plane geometry list."""
+    config_path = resolve_config_path(args.config)
+    if not config_path:
+        print("[ERROR] Configuration file not found.", file=sys.stderr)
+        sys.exit(1)
+
+    exe = find_executable("make_lc_plane", "tools/make_lc_plane")
+    if not exe:
+        print("[ERROR] make_lc_plane executable not found. Run 'make make_lc_plane' first.", file=sys.stderr)
+        sys.exit(1)
+
+    cmd = [exe, "-c", str(config_path)]
+    if args.output:
+        cmd.extend(["-o", str(args.output)])
+
+    print(f"[RUN] {' '.join(cmd)}")
+    res = subprocess.run(cmd)
+    sys.exit(res.returncode)
+
+def run_module_planes(module_name, args):
+    """Run a specific module across multiple planes."""
+    config_path = resolve_config_path(args.config)
+    if not config_path:
+        print("[ERROR] Configuration file not found.", file=sys.stderr)
+        sys.exit(1)
+
+    cfg = load_config(config_path)
+    paths = cfg.get("paths", {})
+    geom = cfg.get("geometry", {})
+    exec_cfg = cfg.get("execution", {})
+
+    mem_gb = args.mem or exec_cfg.get("memory_ceiling_gb", 4.0)
+    workers = args.workers or exec_cfg.get("default_num_workers", 4)
+    planes_file = args.planes_list or geom.get("planes_list_file", "planes_list.txt")
+
+    if not os.path.isfile(planes_file):
+        if os.path.isfile(PROJECT_ROOT / planes_file):
+            planes_file = str(PROJECT_ROOT / planes_file)
+        else:
+            print(f"[ERROR] Planes list file '{planes_file}' not found. Run 'forecast planes' first.", file=sys.stderr)
+            sys.exit(1)
+
+    min_p = args.init_plane if args.init_plane is not None else 0
+    max_p = args.max_plane
+
+    planes = parse_planes_list(planes_file, min_p, max_p)
+    if not planes:
+        print(f"[INFO] No planes found in range [{min_p}, {max_p if max_p is not None else 'end'}].")
+        return
+
+    exe_name = "create_image" if module_name == "image" else f"executable_{module_name}"
+    sub_dir = "postprocessing/create_image" if module_name == "image" else module_name
+    exe = find_executable(exe_name, sub_dir)
+    if not exe:
+        print(f"[ERROR] Executable '{exe_name}' not found. Run 'make {module_name}' first.", file=sys.stderr)
+        sys.exit(1)
+
+    out_dirs = {
+        "lc": paths.get("lc_output_dir", ""),
+        "df": paths.get("df_output_dir", ""),
+        "dc": paths.get("dc_output_dir", ""),
+        "igm": paths.get("igm_output_dir", ""),
+        "image": paths.get("image_output_dir", ""),
+    }
+    out_dir = out_dirs.get(module_name, "")
+    if out_dir:
+        os.makedirs(out_dir, exist_ok=True)
+
+    print(f"============================================================")
+    print(f" FORECAST Running Module: {module_name.upper()}")
+    print(f" Config:     {config_path}")
+    print(f" Executable: {exe}")
+    print(f" Output Dir: {out_dir}")
+    print(f" Planes:     {len(planes)} (range: {min_p} to {planes[-1][1]})")
+    print(f" Workers:    {workers}")
+    print(f" Memory:     {mem_gb} GB")
+    print(f" Force:      {args.force}")
+    print(f"============================================================")
+
+    if module_name == "image":
+        sh_script = PROJECT_ROOT / "postprocessing/create_image/im.sh"
+        if not sh_script.is_file():
+            which_sh = shutil_which("im.sh")
+            if which_sh:
+                sh_script = Path(which_sh)
+    else:
+        sh_script = PROJECT_ROOT / f"{module_name}/{module_name}.sh"
+        if not sh_script.is_file():
+            which_sh = shutil_which(f"{module_name}.sh")
+            if which_sh:
+                sh_script = Path(which_sh)
+
+    use_gnu_parallel = shutil_which("parallel") is not None and sh_script.is_file()
+
+    if use_gnu_parallel:
+        cmd = [
+            str(sh_script),
+            "-n", str(workers),
+            "-i", str(min_p),
+            "-ini", str(config_path),
+            "-lc", str(planes_file),
+            "-m", str(mem_gb),
+        ]
+        if max_p is not None:
+            cmd.extend(["-max", str(max_p)])
+        if getattr(args, "joblog", None):
+            cmd.extend(["-j", str(args.joblog)])
+        if getattr(args, "results", None):
+            cmd.extend(["-r", str(args.results)])
+        if args.force:
+            cmd.append("-f")
+        print(f"[RUN] {' '.join(cmd)}")
+        res = subprocess.run(cmd)
+        sys.exit(res.returncode)
+    else:
+        from concurrent.futures import ProcessPoolExecutor, as_completed
+
+        def worker_task(snap, pl):
+            if not args.force and out_dir:
+                expected = None
+                if module_name == "lc":
+                    expected = os.path.join(out_dir, f"coords.lc.{snap}_{pl}.txt")
+                elif module_name == "df":
+                    expected = os.path.join(out_dir, f"flux.df.{snap}_{pl}.txt")
+                elif module_name == "dc":
+                    expected = os.path.join(out_dir, f"flux.dc.{snap}_{pl}.txt")
+                elif module_name == "igm":
+                    expected = os.path.join(out_dir, f"flux.igm.{snap}_{pl}.txt")
+                
+                if expected and os.path.isfile(expected) and os.path.getsize(expected) > 0:
+                    return (snap, pl, 0, f"[SKIP] {expected} exists")
+
+            cmd = [exe, str(snap), str(pl), str(mem_gb), "-c", str(config_path)]
+
+            res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            return (snap, pl, res.returncode, res.stdout + res.stderr)
+
+        print(f"Starting {len(planes)} plane tasks with {workers} workers...")
+        failed = 0
+        with ProcessPoolExecutor(max_workers=workers) as executor:
+            futures = {executor.submit(worker_task, snap, pl): (snap, pl) for snap, pl in planes}
+            for fut in as_completed(futures):
+                snap, pl = futures[fut]
+                try:
+                    s, p, code, output = fut.result()
+                    if code == 0:
+                        status = "DONE" if "SKIP" not in output else "SKIP"
+                        print(f"  [{status}] Plane {p} (Snap {s})")
+                    else:
+                        print(f"  [ERROR] Plane {p} (Snap {s}) exited with code {code}:\n{output}")
+                        failed += 1
+                except Exception as e:
+                    print(f"  [EXC] Plane {pl} (Snap {snap}): {e}")
+                    failed += 1
+
+        if failed > 0:
+            print(f"[ERROR] {failed} planes failed.")
+            sys.exit(1)
+        else:
+            print("[SUCCESS] All planes processed successfully.")
+
+def shutil_which(pgm):
+    from shutil import which
+    return which(pgm)
+
+def cmd_run(args):
+    """Run full FORECAST pipeline across planes."""
+    config_path = resolve_config_path(args.config)
+    if not config_path:
+        print("[ERROR] Configuration file not found.", file=sys.stderr)
+        sys.exit(1)
+
+    cfg = load_config(config_path)
+    exec_cfg = cfg.get("execution", {})
+    workers = args.workers or exec_cfg.get("default_num_workers", 4)
+    mem_gb = args.mem or exec_cfg.get("memory_ceiling_gb", 4.0)
+
+    sh_script = PROJECT_ROOT / "forecast.sh"
+    if not sh_script.is_file():
+        which_sh = shutil_which("forecast.sh")
+        if which_sh:
+            sh_script = Path(which_sh)
+    if not sh_script.is_file():
+        print(f"[ERROR] forecast.sh not found at {sh_script}", file=sys.stderr)
+        sys.exit(1)
+
+    cmd = [
+        str(sh_script),
+        "-c", str(config_path),
+        "-n", str(workers),
+        "-i", str(args.init_plane or 0),
+        "-m", str(mem_gb),
+    ]
+    if args.max_plane is not None:
+        cmd.extend(["-max", str(args.max_plane)])
+    if getattr(args, "joblog", None):
+        cmd.extend(["-j", str(args.joblog)])
+    if getattr(args, "results", None):
+        cmd.extend(["-r", str(args.results)])
+    if args.force:
+        cmd.append("-f")
+
+    print(f"[RUN] {' '.join(cmd)}")
+    res = subprocess.run(cmd)
+    sys.exit(res.returncode)
+
+def cmd_single(args):
+    """Run a single plane on a specific module."""
+    config_path = resolve_config_path(args.config)
+    if not config_path:
+        print("[ERROR] Configuration file not found.", file=sys.stderr)
+        sys.exit(1)
+
+    cfg = load_config(config_path)
+    mem_gb = args.mem or cfg.get("execution", {}).get("memory_ceiling_gb", 4.0)
+    mod = args.module.lower()
+
+    exe_name = "create_image" if mod == "image" else f"executable_{mod}"
+    sub_dir = "postprocessing/create_image" if mod == "image" else mod
+    exe = find_executable(exe_name, sub_dir)
+    if not exe:
+        print(f"[ERROR] Executable for {mod} not found.", file=sys.stderr)
+        sys.exit(1)
+
+    cmd = [exe, str(args.snapshot), str(args.plane), str(mem_gb), "-c", str(config_path)]
+
+    print(f"[RUN] {' '.join(cmd)}")
+    res = subprocess.run(cmd)
+    sys.exit(res.returncode)
+
+def cmd_stack(args):
+    """Stack plane FITS images into a final mosaic image."""
+    config_path = resolve_config_path(args.config)
+    if not config_path:
+        print("[ERROR] Configuration file not found.", file=sys.stderr)
+        sys.exit(1)
+
+    cfg = load_config(config_path)
+    img_dir = cfg.get("paths", {}).get("image_output_dir", "")
+    target_filter = cfg.get("create_image", {}).get("target_filter", "Roman_WFI_f158")
+    
+    if not img_dir or not os.path.isdir(img_dir):
+        print(f"[ERROR] Image directory '{img_dir}' does not exist.", file=sys.stderr)
+        sys.exit(1)
+
+    out_file = args.output or os.path.join(img_dir, f"lightcone_{target_filter}_total.fits")
+    stack_script = PROJECT_ROOT / "postprocessing/sum_images.py"
+    if not stack_script.is_file():
+        which_stack = shutil_which("sum_images.py")
+        if which_stack:
+            stack_script = Path(which_stack)
+    if not stack_script.is_file():
+        print(f"[ERROR] Stacking script '{stack_script}' not found.", file=sys.stderr)
+        sys.exit(1)
+
+    cmd = [sys.executable, str(stack_script), "-i", img_dir, "-o", out_file]
+    print(f"[RUN] {' '.join(cmd)}")
+    res = subprocess.run(cmd)
+    sys.exit(res.returncode)
+
+def main():
+    common_parser = argparse.ArgumentParser(add_help=False)
+    common_parser.add_argument("-c", "--config", help="Path to forecast.yaml configuration file")
+
+    parser = argparse.ArgumentParser(
+        prog="forecast",
+        description="FORECAST - Synthetic Lightcone Simulator CLI",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        parents=[common_parser],
+    )
+
+    subparsers = parser.add_subparsers(dest="command", help="Available subcommands")
+
+    # check
+    p_check = subparsers.add_parser("check", parents=[common_parser], help="Verify configuration, inputs, and executables")
+    p_check.set_defaults(func=cmd_check)
+
+    # planes
+    p_planes = subparsers.add_parser("planes", parents=[common_parser], help="Generate lightcone planes list")
+    p_planes.add_argument("-o", "--output", help="Output path for planes list file")
+    p_planes.set_defaults(func=cmd_planes)
+
+    # module runners: lc, df, dc, igm, image
+    for mod in ["lc", "df", "dc", "igm", "image"]:
+        p_mod = subparsers.add_parser(mod, parents=[common_parser], help=f"Run {mod.upper()} module batch processing")
+        p_mod.add_argument("-n", "--workers", type=int, help="Number of parallel workers")
+        p_mod.add_argument("-i", "--init-plane", type=int, default=0, help="Initial plane number (default: 0)")
+        p_mod.add_argument("-max", "--max-plane", type=int, help="Maximum plane number")
+        p_mod.add_argument("-m", "--mem", type=float, help="Memory ceiling in GB (for lc/df/dc/igm)")
+        p_mod.add_argument("-lc", "--planes-list", help="Path to planes_list.txt file")
+        p_mod.add_argument("-j", "--joblog", help="Path to file where GNU parallel logs job run statistics")
+        p_mod.add_argument("-r", "--results", help="Directory path where stdout/stderr of each job is stored")
+        p_mod.add_argument("-f", "--force", action="store_true", help="Force recomputation of existing outputs")
+        p_mod.set_defaults(func=lambda args, m=mod: run_module_planes(m, args))
+
+    # run (full pipeline)
+    p_run = subparsers.add_parser("run", parents=[common_parser], help="Run full pipeline (LC -> DF -> DC -> IGM) across planes")
+    p_run.add_argument("-n", "--workers", type=int, help="Number of parallel workers")
+    p_run.add_argument("-i", "--init-plane", type=int, default=0, help="Initial plane number (default: 0)")
+    p_run.add_argument("-max", "--max-plane", type=int, help="Maximum plane number")
+    p_run.add_argument("-m", "--mem", type=float, help="Memory ceiling in GB per process")
+    p_run.add_argument("-j", "--joblog", help="Path to file where GNU parallel logs job run statistics")
+    p_run.add_argument("-r", "--results", help="Directory path where stdout/stderr of each job is stored")
+    p_run.add_argument("-f", "--force", action="store_true", help="Force recomputation")
+    p_run.set_defaults(func=cmd_run)
+
+    # single plane
+    p_single = subparsers.add_parser("single", parents=[common_parser], help="Run a single plane on a specific module")
+    p_single.add_argument("module", choices=["lc", "df", "dc", "igm", "image"], help="Module name")
+    p_single.add_argument("snapshot", type=int, help="Snapshot number")
+    p_single.add_argument("plane", type=int, help="Plane number")
+    p_single.add_argument("-m", "--mem", type=float, help="Memory ceiling in GB")
+    p_single.set_defaults(func=cmd_single)
+
+    # stack
+    p_stack = subparsers.add_parser("stack", parents=[common_parser], help="Stack plane FITS images into lightcone mosaic")
+    p_stack.add_argument("-o", "--output", help="Output path for final stacked FITS file")
+    p_stack.set_defaults(func=cmd_stack)
+
+    args = parser.parse_args()
+
+    if not args.command:
+        parser.print_help()
+        sys.exit(0)
+
+    args.func(args)
+
+if __name__ == "__main__":
+    main()

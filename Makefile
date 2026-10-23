@@ -64,8 +64,10 @@ install: all
 	@rm -f $(HOME)/.local/bin/forecast $(HOME)/.local/bin/executable_lc $(HOME)/.local/bin/executable_df \
 	       $(HOME)/.local/bin/executable_dc $(HOME)/.local/bin/executable_igm $(HOME)/.local/bin/create_image \
 	       $(HOME)/.local/bin/make_lc_plane $(HOME)/.local/bin/forecast.sh $(HOME)/.local/bin/im.sh 2>/dev/null || true
+	@echo "Installing Python library (forecast) into Conda environment..."
+	@python3 -m pip install -e . --no-deps --no-build-isolation 2>/dev/null || python3 -m pip install -e . --no-deps
 	@echo "Installation complete."
-	@echo "FORECAST CLI and tools are installed into $(BINDIR) and active in PATH only when this Conda environment is activated."
+	@echo "FORECAST C++ executables and Python library (forecast.postprocessing) are now available in your Conda environment."
 
 uninstall:
 	@echo "Uninstalling FORECAST CLI tools from $(BINDIR)..."
@@ -74,6 +76,7 @@ uninstall:
 	@rm -f $(HOME)/.local/bin/forecast $(HOME)/.local/bin/executable_lc $(HOME)/.local/bin/executable_df \
 	       $(HOME)/.local/bin/executable_dc $(HOME)/.local/bin/executable_igm $(HOME)/.local/bin/create_image \
 	       $(HOME)/.local/bin/make_lc_plane $(HOME)/.local/bin/forecast.sh $(HOME)/.local/bin/im.sh 2>/dev/null || true
+	@python3 -m pip uninstall -y forecast-sim 2>/dev/null || true
 	@echo "Uninstallation complete."
 
 clean:

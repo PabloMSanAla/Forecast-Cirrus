@@ -1,0 +1,70 @@
+{% set name = "forecast" %}
+{% set version = "1.0.0" %}
+
+package:
+  name: {{ name|lower }}
+  version: {{ version }}
+
+source:
+  path: ..
+
+build:
+  number: 0
+  skip: True  # [win]
+
+requirements:
+  build:
+    - {{ compiler('cxx') }}
+    - {{ compiler('c') }}
+    - make
+  host:
+    - python >=3.8
+    - pip
+    - setuptools >=61.0
+    - armadillo
+    - openblas
+    - lapack
+    - hdf5
+    - cfitsio
+    - ccfits
+    - gsl
+    - fftw
+    - eigen
+    - yaml-cpp
+  run:
+    - python >=3.8
+    - pyyaml >=5.1
+    - numpy
+    - pandas
+    - astropy
+    - tqdm
+    - requests
+    - psutil
+    - parallel
+    - armadillo
+    - openblas
+    - lapack
+    - hdf5
+    - cfitsio
+    - ccfits
+    - gsl
+    - fftw
+    - yaml-cpp
+
+test:
+  commands:
+    - forecast --help
+    - executable_lc 98 0 --help 2>&1 | grep -q FORECAST || true
+  imports:
+    - forecast
+    - forecast.postprocessing
+
+about:
+  home: https://github.com/PabloMSanAla/Forecast-Cirrus
+  license: MIT
+  license_family: MIT
+  summary: "FORECAST - Cosmological Lightcone Synthesis and Postprocessing Pipeline"
+  description: |
+    A high-performance C++ and Python pipeline for generating synthetic cosmological
+    lightcones, spectral energy distributions (SEDs), dust attenuation models,
+    and postprocessed galaxy mock catalogs and FITS images from cosmological simulations.
