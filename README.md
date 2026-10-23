@@ -1,189 +1,307 @@
 # FORECAST
-FORECAST is a new flexible and adaptable software package that generates realistic astronomical images and galaxy surveys by forward modeling the output snapshot of any hydrodynamical cosmological simulation.
-With customizable options for filters, size of the field of view, and survey parameters, it allows users to tailor the synthetic images to their specific research requirements.
 
-### Table of Contents
-1. [In a few words](#in-a-few-words)
-2. [Requirements](#requirements)
-3. [How to install and run](#how-to-install-and-run)
-5. [Pipeline](#pipeline)
-6. [Configuration file](#configuration-file)
-7. [Input files format](#input-files-format)
-8. [Output description](#output-description)
-9. [Contributing](#contributing)
-10. [Citation and Acknowledgement](#citation-and-acknowledgment)
+**FORECAST** (*FOrward modeling hydrodynamical REsolutions into Cost-effective Astronomical Synthetic surveys and Targets*) is a high-performance, modular pipeline designed to construct realistic mock astronomical lightcones, galaxy catalogs, and synthetic astronomical images (FITS) from hydrodynamical cosmological simulations (e.g., IllustrisTNG).
 
-    
-## In a few words
-FORECAST constructs a lightcone centered on the observer's position exploiting the output snapshots of a chosen simulation and computes the observed fluxes of each simulated stellar element, modeled as a Single Stellar Population (SSP), in any chosen set of pass-band filters, including k-correction, IGM absorption, and dust attenuation. These fluxes are then used to create an image on a grid of pixels, to which observational features such as background noise and PSF blurring can be added with our Python script to post-process the images (upon request), or by the user with their own script.
+---
 
-## Requirements
-FORECAST is written in C and C++; it is supported by independent libraries to make the code more readable and user-friendly. 
-It requires the following C/C++ standard libraries: 
-* [GSL](https://www.gnu.org/software/gsl/)
-* [openBLAS](https://www.openblas.net/)
-* [LAPACK](http://www.netlib.org/lapack/)
-* [CCfits](https://heasarc.gsfc.nasa.gov/fitsio/CCfits/)
-* [CFITSIO](https://heasarc.gsfc.nasa.gov/fitsio/)
-* [FFTW](https://www.fftw.org/)
-* [Eigen](https://gitlab.com/libeigen/eigen)
-* [Armadillo](http://arma.sourceforge.net/)
-* [H5Cpp](http://h5cpp.org/)
-* [HDF5 C++](https://www.hdfgroup.org/)
-* gcc compiler
-* [bc03](https://www.bruzual.org/bc03/Original_version_2003/) or [cb16](flaminia.fortuni at inaf.it) SSP models.  
+## Table of Contents
+1. [Key Features & Hardware Requirements](#key-features--hardware-requirements)
+2. [Installation](#installation)
+3. [Configuration (`forecast.yaml`)](#configuration-forecastyaml)
+4. [Unified CLI Usage (`forecast`)](#unified-cli-usage-forecast)
+5. [Module-by-Module Reference](#module-by-module-reference)
+6. [Parallel Batch Execution (GNU Parallel)](#parallel-batch-execution-gnu-parallel)
+7. [Python Postprocessing Library](#python-postprocessing-library)
+8. [Exit Codes](#exit-codes)
+9. [Citation](#citation)
 
-## How to install and run
-- Download the code with the "Code" green button on this page, or clone it with `git clone https://github.com/flaminiafortuni/FORECAST`
-- Download and install the required C/C++ libraries (see [Requirements](#requirements))
-- Download the hydrodynamical simulation snapshots as input files (e.g., [IllustrisTNG](https://www.tng-project.org/data/), [EAGLE](https://icc.dur.ac.uk/Eagle/database.php))
-- In each of the four modules ([lc](lc), [df](df), [dc](dc), [igm](igm)):
-  1. open the `Makefile` and link proper libraries (change only "LIBS" an "ALLFLAGS" paths; e.g., in line  `-L/usr/local/lib/  -lgsl -lgslcblas  \` change only `/usr/local/lib/`)
-  2. compile the `Makefile`(s) with `make`   
-- Change paths and parameters in the input configuration file `\*.ini` (in each module; see  [Configuration file](#configuration-file) for further details)
--  Write the list of filters in the file  `filters.dat` located in `files` folder, exactly as you named them in your filters folder (e.g., if you want to use `VIMOS_U.dat`, in the list, you will write `VIMOS_U`). Ensure that the filter file contains no header and consist of two columns: wavelength in AA and filter transmission
-- Modify `*module*.sh` by writing the snapshots you want to run on (single available snapshot or a list), and run `bash *module*.sh` or `sh *module*.sh` (one partition per time; refer to `planes_list` file to choose the partition/(snapshot,plane) pair). 
+---
 
-## Pipeline
-The FORECAST code, currently available in *beta* version, is structured into four interconnected modules; each module relies on the output of the previous one. The first and third modules require the input file from the snapshots of hydrodynamical simulation to extract relevant properties of the simulated stellar and gas resolution elements.
+## Key Features & Hardware Requirements
 
-The architecture of the code is serial. To construct the full lightcone, the *lc* module must be executed N times, where N is the number of partitions  that constitute the cone - a partition is identified by the (snapshot, plane) pair in the `planes_list` file. The same applies to the other modules and to post-processing script that creates the final image. This implies that the output of a single run is specific to the (snapshot, plane) pair. 
+### Low-RAM Friendly & RAM-Aware Execution
+All modules in FORECAST include **active RSS memory ceiling monitoring** and **streaming architectures**:
+- **Runs on Consumer Laptops / Local Machines**: The entire pipeline can execute safely within user-defined memory limits (e.g., **4 GB**, **8 GB**, or **16 GB** RAM limits).
+- **Zero OOM Crashes**: If an individual process approaches the memory limit, it gracefully exits with code `3` rather than triggering an operating system kernel kill (`SIGKILL`/OOM).
+- **Streaming Algorithms**:
+  - `lc`: Bounded binary spooling and online subhalo aggregators cap peak RAM below **420 MB** (even on 110M+ particle slices).
+  - `df`: Bounded batch streaming caps peak RAM under **35 MB**.
+  - `dc` & `igm`: Two-pass streaming catalog ingestion bounds peak RAM under **350 MB** (even with 50M+ stars and 140M+ gas cells).
+  - `create_image`: Automatically sizes horizontal row slabs to fit within your designated RAM budget (e.g. 4 GB ceiling = 3 slabs, 16 GB ceiling = 1 single pass).
 
-* [lightcone, lc](lc) The first module handles the construction of the light cone, exploiting the data products of a chosen hydrodynamical simulation. Its architecture details are recorded in the `planes_list` file, generated by executing this module. It contains the following information with columns: #plane_i, z_plane_i, Di[Mpc/h], Di+1[Mpc/h], Nreplication_i, snapshot_i, z_nominal_snapshot_i. In output, it produces an ASCII file containing the properties of the SSPs included in the field of view (IDs, coordinates, redshift, and physical properties), which is used as input file for the next module. This step might be skipped if a user already has their light cone, as long as the input file for the next module is written in the proper format. 
-* [dust-free, df](df) The second module computes the flux of each SSP within the field of view, applying k-correction. It takes as input the catalog generated in the previous step. It generates an ASCII file containing the properties of the star particles and their dust-free fluxes in the selected filters.
-* [dust-corrected, dc](dc) The third module addresses the computation of the dust attenuation caused by dust distributed in and around each galaxy. This attenuation is traced by gas resolution elements included in the hydrodynamical simulation, providing the necessary data to calculate the dust attenuation effects (gas metallicity and neutral hydrogen column density). The module relies on data products from the hydrodynamical simulation to extract gas properties; it also takes the catalog generated in the previous step as input. As output, it generates an ASCII file containing the properties of the star particles and their dust-corrected fluxes in the selected filters.
-* [IGM, igm](igm) The final module adds the IGM correction to dust-corrected fluxes, taking as input the catalog generated in the previous step and producing the final output catalog, which includes the physical properties of the stellar particles and their corrected fluxes.
-### Post-processing scripts
-An independent C++ script handles the arrangement of the fluxes on a grid of pixels, with fov size and resolution chosen by the user. It follows the same approach of the main modules, running independently for each (snapshot, plane) pair and filter.   
-Two additional independent scripts, written in Python, are made available (i) to build the galaxy catalog, in ASCII format, from the N particle catalogs given in output by FORECAST; (ii) to post-process the FORECAST images with noise and PSF pipeline.
+### Hardware Requirements
+| Resource | Minimum (Budget Laptop) | Recommended (Workstation / HPC) |
+| :--- | :--- | :--- |
+| **RAM** | **4 GB** (using `-m 4.0`) | **16 GB – 32 GB** |
+| **CPU** | 2 cores (serial execution) | 8–32+ cores for GNU Parallel batch runs |
+| **Storage** | 100 GB+ free disk space | Fast NVMe SSD (recommended for fast FITS writing) |
+| **OS** | Linux (x86_64) or macOS (Apple Silicon / Intel) | Linux (x86_64) |
 
+---
 
-## Configuration file
-FORECAST is adaptable to the choices of the user by selecting a set of input parameters. 
-The input parameters can be changed in the `*module*.ini` file(s).
-As an example, it is possible to choose the hydrodynamical simulation that provides the backbone of the light cone (box with side-length L_box); the highest redshift to be included, z_s, which determines the maximum distance covered by the light cone, D_s; the dimensions of the field of view, L_{fov} in degrees; the resolution of the ideal simulated images, in arcsecs; the filters, by the order they are written in the `filters` file; the SSP model (Bruzual&Charlot 2003, bc03; or Gutkin et al. 2016, cb16) and the IMF (Chabrier or Salpeter); the limiting magnitude within which to process objects using the dust model adopted in FORECAST; the paths where the simulations snapshot are stored, and where to store the outputs of the specific module.
+## Installation
 
+FORECAST uses a pure **Conda** toolchain and compiles natively on both **Linux** and **macOS** (Apple Silicon `arm64` and Intel `x86_64`) without requiring Homebrew or system-level root packages.
 
-## Input files format
-FORECAST works by taking as input the physical properties of stellar particles and gas cells recorded in each snapshot of the chosen simulation. Currently, the code reads input files in the _IllustrisTNG_ format. Users are required to convert their data into the TNG format (`*.hdf5` files with the same column names as TNG columns) to ensure the effective utilization of the code. Future updates to the code will include additional scripts to read input files from multiple hydrodynamical simulations in different formats, such as [the EAGLE Project](https://ui.adsabs.harvard.edu/abs/2015MNRAS.446..521S/abstract) and [the Simba Simulation](https://ui.adsabs.harvard.edu/abs/2019MNRAS.486.2827D/abstract) data products. 
+### 1. Create and Activate the Conda Environment
+```bash
+git clone https://github.com/flaminiafortuni/FORECAST.git
+cd FORECAST
 
-For stellar particles (" _PartType4_ "), FORECAST requires:
-- " _Coordinates_ " x,y,z-comoving coordinates within the simulated volume, in ckpc
-- " _Masses_ " stellar mass, in $M_{\odot}$
-- " _InitialMass_ " initial stellar mass, in $M_{\odot}$
-- " _GFM_Metallicity_ " metallicity as $M_{Z}/M_{TOT}$
-- " _GFM_StellarFormationTime_ " scale factor indicating the exact time when a star is formed, to compute age in yr
-- " particle subhalo membership ID " this info is not available; it is reconstructed with a designed algorithm that uses _SubFind_ subhalo catalogs and _Offset_ files, exploiting the specific organization of halos and subhalos within the catalog files.
+# Create environment with all C++ and Python dependencies
+conda env create -f environment.yml
+conda activate forecast
+```
 
-For gas cells (" _PartType0_ "):
-- " _Coordinates_ " x,y,z-comoving coordinates of the geometrical center within the snapshot, in ckpc
-- " _Masses_ " gas mass, in $M_{\odot}$; needed to compute Volume
-- " _Density_ " gas comoving volume, in $ckpc^{3}$; needed to compute Volume
-- " _GFM_Metallicity_ " gas metallicity, in $M_{Z}/M_{TOT}$ (with $M_Z$ the total mass all metal elements)
-- " _ElectronAbundance_ " gas cell fractional electron number density in $ckpc^{-2}$ with respect total hydrogen number density, 
-- " _InternalEnergy_ " gas cell internal (thermal) energy per unit mass $u$, needed to derive the neutral hydrogen column density
-- " cell subhalo membership ID " same as for stellar particles
+### 2. Build and Install
+Compile all C++ modules, link CLI binaries into `$CONDA_PREFIX/bin`, and install the Python package:
+```bash
+make all
+make install
+```
 
-For the exact descriptions of the fields, please refer to [IllustrisTNG/DataSpecification](https://www.tng-project.org/data/docs/specifications/#parttype0).
+Verify the installation:
+```bash
+forecast check
+```
 
-## Output description
-The outputs of the code are the catalogs (one for each partition and module), including the physical properties and the true fluxes of the simulated stellar particles. They are used to build the galaxy catalog, created with a post-processing script.
-    The catalogs, both the particles and the galaxy ones, have different sizes depending on the number of particles (or galaxies) included in the field of view and typically grow in size as the redshift increases since more structures are included. The total size of output files is 1 TB.
-    The output images are recorded on 16-bit floating-point FITS files. Each plane (projection on a bi-dimensional map of fluxes from a volume of the Universe included in the field of view, in a redshift range) occupies 3 GB, while the size of the final stacked image is 5 GB.
+*(To run automated tests and verify MD5 determinism: `make test`)*
 
-## Contributing
+---
 
-## Citation and Acknowledgment
+## Configuration (`forecast.yaml`)
 
-When using the code, please cite the release paper [Fortuni et al., 2023](https://ui.adsabs.harvard.edu/abs/2023arXiv230519166F/abstract). 
+FORECAST is configured through a unified YAML configuration file: `forecast.yaml`.
 
-```@ARTICLE{2023A&A...677A.102F,
+```yaml
+geometry:
+  box_size: 35.0                    # Simulation box size in Mpc/h
+  field_of_view_deg: 1.16           # FOV side in degrees
+  source_redshift: 0.7              # Maximum lightcone redshift
+  image_resolution_arcsec: 0.1      # Pixel scale in arcsec/pixel
+  planes_list_file: "lc/planes_list.txt"
+
+simulation:
+  snapshot_dir: "/path/to/TNG50-2/" # Directory containing snapdir_XXX/
+  subhalo_dir: "/path/to/TNG50-2/"
+
+modules:
+  ssp_model: "bc03"                 # bc03 or cb16
+  imf: "chabrier"                   # chabrier or salpeter
+  filter_name: "Roman_WFI_f158"     # Target filter for images
+  filters_file: "files/filters.dat"
+  extinction_file: "dc/extinctionCCM89.dat"
+
+paths:
+  output_dir: "output/"             # Base output directory
+  memory_ceiling_gb: 4.0            # Memory limit per process in GB
+```
+
+*(Legacy `.ini` files—`lc.ini`, `df.ini`, `dc.ini`, `igm.ini`, `image.ini`—remain fully supported).*
+
+---
+
+## Unified CLI Usage (`forecast`)
+
+The `forecast` command-line tool provides a unified entry point for inspecting, running, and managing every stage of the pipeline.
+
+```bash
+# Validate environment, compilers, and configuration paths
+forecast check [-c forecast.yaml]
+
+# Display or filter planes list
+forecast planes [-c forecast.yaml]
+
+# Run a single plane for a specific module
+forecast <lc|df|dc|igm|image> <snapshot> <plane> [memory_ceiling_gb] [-c forecast.yaml]
+
+# Run a full module batch in parallel across all planes
+forecast <lc|df|dc|igm|image> -c forecast.yaml -n 4 -m 4.0
+
+# Run the complete end-to-end pipeline across all planes
+forecast run -c forecast.yaml -n 4 -m 4.0
+
+# Stack plane FITS images into a final lightcone mosaic
+forecast stack -c forecast.yaml
+```
+
+---
+
+## Module-by-Module Reference
+
+Each module can also be invoked directly as a standalone executable.
+
+### 1. `lc` (Lightcone Construction)
+Reads stellar and gas particles from simulation HDF5 snapshots and selects elements within the lightcone geometry.
+* **CLI Executable**:
+  ```bash
+  ./lc/executable_lc <snapshot> <plane> [memory_ceiling_gb] [-c forecast.yaml | -ini lc/lc.ini]
+  ```
+* **Example**:
+  ```bash
+  ./lc/executable_lc 98 0 4.0 -c forecast.yaml
+  ```
+* **Output**: `coords.lc.<snapshot>_<plane>.txt` (ASCII particle coordinates and properties).
+
+---
+
+### 2. `df` (Dust-Free Photometry)
+Computes synthetic SEDs, k-corrections, and dust-free fluxes across selected filters using BC03 or CB16 SSP models.
+* **CLI Executable**:
+  ```bash
+  ./df/executable_df <snapshot> <plane> [memory_ceiling_gb] [-c forecast.yaml | -ini df/df.ini]
+  ```
+* **Example**:
+  ```bash
+  ./df/executable_df 98 0 4.0 -c forecast.yaml
+  ```
+* **Output**: `flux.df.<snapshot>_<plane>.txt` (stellar particles with dust-free fluxes).
+
+---
+
+### 3. `dc` (Dust Attenuation)
+Extracts gas cell column densities and metallicities from simulation snapshots to compute dust optical depth and attenuated fluxes.
+* **CLI Executable**:
+  ```bash
+  ./dc/executable_dc <snapshot> <plane> [memory_ceiling_gb] [-c forecast.yaml | -ini dc/dc.ini]
+  ```
+* **Example**:
+  ```bash
+  ./dc/executable_dc 98 0 4.0 -c forecast.yaml
+  ```
+* **Outputs**: `flux.dc.<snapshot>_<plane>.txt`, `coords.dc.<snapshot>_<plane>.txt`.
+
+---
+
+### 4. `igm` (Intergalactic Medium Absorption)
+Applies IGM transmission corrections (Inoue et al. 2014) to dust-attenuated fluxes as a function of redshift and wavelength.
+* **CLI Executable**:
+  ```bash
+  ./igm/executable_igm <snapshot> <plane> [memory_ceiling_gb] [-c forecast.yaml | -ini igm/igm.ini]
+  ```
+* **Example**:
+  ```bash
+  ./igm/executable_igm 98 0 4.0 -c forecast.yaml
+  ```
+* **Output**: `flux.igm.<snapshot>_<plane>.txt`.
+
+---
+
+### 5. `create_image` (FITS Rasterization)
+Projects 3D particle positions and fluxes onto a 2D pixel grid, dynamically streaming horizontal row slabs to enforce RAM limits, and outputs a 16-bit floating-point FITS image.
+* **CLI Executable**:
+  ```bash
+  ./postprocessing/create_image/executable_create_image <snapshot> <plane> [memory_ceiling_gb] [-c forecast.yaml | -ini postprocessing/create_image/image.ini]
+  ```
+* **Example**:
+  ```bash
+  ./postprocessing/create_image/executable_create_image 98 0 4.0 -c forecast.yaml
+  ```
+* **Output**: `<filter>.<module>.<snapshot>_<plane>.fits`.
+
+---
+
+## Parallel Batch Execution (GNU Parallel)
+
+All modules include robust batch runner scripts powered by **GNU Parallel**. Each script automatically validates inputs, enforces per-job memory ceilings, logs execution details, and **skips already completed planes** for seamless restartability.
+
+```bash
+# Lightcone module
+./lc/lc.sh -c forecast.yaml -n 4 -m 4.0
+
+# Dust-Free module
+./df/df.sh -c forecast.yaml -n 4 -m 4.0
+
+# Dust-Corrected module
+./dc/dc.sh -c forecast.yaml -n 4 -m 4.0
+
+# IGM module
+./igm/igm.sh -c forecast.yaml -n 4 -m 4.0
+
+# Image generation module
+./postprocessing/create_image/im.sh -c forecast.yaml -n 4 -m 4.0
+
+# Full end-to-end pipeline batch runner
+./forecast.sh -c forecast.yaml -n 4 -m 4.0
+```
+
+### Common Batch Script Options
+| Flag | Description | Default |
+| :--- | :--- | :--- |
+| `-n <cores>` | Number of parallel jobs | Number of CPU cores |
+| `-m <GB>` | Memory ceiling per job in GB | `4.0` |
+| `-c <path>` | Path to unified `forecast.yaml` | `forecast.yaml` |
+| `-max <N>` | Process only up to plane index `N` | All planes in `planes_list.txt` |
+| `-f, --force` | Force recomputation, overwriting existing outputs | Off (skips existing non-empty files) |
+| `-j <log>` | GNU parallel job log file path | None |
+| `-r <dir>` | Directory to save per-plane stdout and stderr | None |
+
+---
+
+## Python Postprocessing Library
+
+The `forecast` package provides Python utilities for catalog aggregation and FITS stacking:
+
+```python
+from forecast.postprocessing import (
+    build_galaxy_catalog,
+    merge_galaxy_catalogs,
+    stack_fits_images,
+)
+
+# 1. Convert particle tables into galaxy-level mock catalogs
+build_galaxy_catalog(
+    planes_file="lc/planes_list.txt",
+    module="igm",
+    input_path="output/igm/",
+    filter_pos=0,
+    fov_deg=1.16,
+    res_as=0.1
+)
+
+# 2. Merge all plane catalogs into a final lightcone galaxy catalog
+merge_galaxy_catalogs(
+    planes_file="lc/planes_list.txt",
+    module="igm",
+    input_path="output/igm/",
+    output_catalog="output/final_cat.igm.dat"
+)
+
+# 3. Stack per-plane FITS images into a deep mock survey image
+stack_fits_images(
+    image_dir="output/image/",
+    filter_name="Roman_WFI_f158",
+    module="igm",
+    output_fits="output/stacked_mosaic.fits"
+)
+```
+
+---
+
+## Exit Codes
+
+All executables adhere to standard exit codes:
+* `0`: **Success** — Job completed and verified.
+* `1`: **Input / Validation Error** — Missing arguments, invalid numbers, or `(snapshot, plane)` pair not found in `planes_list.txt`.
+* `2`: **File / I/O Error** — Missing input files, unreadable HDF5 dataset, or missing configuration file.
+* `3`: **Memory Ceiling Breach** — Process exceeded the user-specified RAM limit (`--mem`).
+
+---
+
+## Citation
+
+If you use FORECAST in your research, please cite:
+
+```bibtex
+@ARTICLE{2023A&A...677A.102F,
        author = {{Fortuni}, Flaminia and {Merlin}, Emiliano and {Fontana}, Adriano and {Giocoli}, Carlo and {Romelli}, Erik and {Graziani}, Luca and {Santini}, Paola and {Castellano}, Marco and {Charlot}, St{\'e}phane and {Chevallard}, Jacopo},
         title = "{FORECAST: A flexible software to forward model cosmological hydrodynamical simulations mimicking real observations}",
       journal = {\aap},
-     keywords = {virtual observatory tools, galaxies: evolution, Astrophysics - Instrumentation and Methods for Astrophysics, Astrophysics - Astrophysics of Galaxies, 85},
          year = 2023,
         month = sep,
        volume = {677},
           eid = {A102},
         pages = {A102},
-          doi = {10.1051/0004-6361/202346725},
-archivePrefix = {arXiv},
-       eprint = {2305.19166},
- primaryClass = {astro-ph.IM},
-       adsurl = {https://ui.adsabs.harvard.edu/abs/2023A&A...677A.102F},
-      adsnote = {Provided by the SAO/NASA Astrophysics Data System}
+          doi = {10.1051/0004-6361/202346725}
 }
 ```
-
-## Module Details (detailed)
-
-Below are short, practical descriptions of what each module actually does, their inputs and outputs, and notes useful to run and extend the code.
-
-- **lc/**
-  - Purpose: construct the lightcone from simulation snapshots (TNG style). `main_lc.cpp` reads particle data (stars/gas) from HDF5 snapshot files, selects particles inside the chosen field of view and redshift slice (plane), and writes particle-level catalogs used by downstream modules.
-  - Key files: `main_lc.cpp`, `readTNGParticle.*` (HDF5 reader and helpers), `functions.*` (utility routines), `planes_list.txt` (plane definitions), `lc.ini` (module configuration).
-  - Inputs: per-snapshot HDF5 files (PartType4 = stars, PartType0 = gas), `planes_list.txt`, filter definitions, `lc.ini`.
-  - Outputs: ASCII particle-in-FOV catalogs (one per partition/plane), runtime logs and auxiliary index files used by `df` and `dc`.
-  - Run notes: `lc` must be run once per (snapshot,plane) partition listed in `planes_list.txt`.
-
-- **df/**
-  - Purpose: compute dust-free photometry for stellar particles (k-corrections and mapping SSP properties to fluxes in desired filters). Takes the particle catalog from `lc` and outputs fluxes before dust attenuation.
-  - Key files: `main_df.cpp`, `functions.*`, `df.ini`.
-  - Inputs: `lc` particle catalog, SSP tables (e.g., BC03 or CB16), `df.ini`, filters.
-  - Outputs: ASCII catalogs with dust-free flux columns per filter.
-
-- **dc/**
-  - Purpose: compute dust attenuation using the gas properties from the snapshots. For each galaxy or local region the module integrates gas column densities/metallicities to estimate optical depth and correct the fluxes.
-  - Key files: `main_dc.cpp`, `functions.*`, `dc.ini`.
-  - Inputs: `df` dust-free flux catalogs and snapshot gas properties (PartType0) as needed.
-  - Outputs: dust-corrected flux catalogs used by `igm` and postprocessing.
-
-- **igm/**
-  - Purpose: apply intergalactic medium (IGM) attenuation to dust-corrected fluxes. The implementation uses the prescription in `IGM_Ino14.cpp` (Inoue et al. 2014).
-  - Key files: `main_igm.cpp`, `IGM_Ino14.*`, `igm.ini`.
-  - Inputs: dust-corrected catalogs from `dc`, redshifts of sources, and filters.
-  - Outputs: final corrected flux catalogs ready for image-making and catalog production.
-
-- **postprocessing/**
-  - Purpose: create galaxy catalogs and images from the per-plane catalogs and flux outputs. Includes Python utilities `galaxy_cat.py`, `merge_cat.py`, `sum_fits.py` to merge planes and build final catalogs; `create_image/` contains C++ utilities to rasterize fluxes into FITS images.
-  - Key files: `create_image/create_image.cpp`, `galaxy_cat.py`, `merge_cat.py`.
-  - Inputs: final flux catalogs from `igm` (or `dc` if skipping IGM), filters, image configuration (`image.ini`).
-  - Outputs: FITS images (16-bit float), stacked survey images, combined galaxy catalogs.
-
-## macOS / Homebrew notes (Apple Silicon friendly)
-
-- The `lc/Makefile` was updated to detect Homebrew via `brew --prefix` (falls back to `/opt/homebrew`) and adds `-I$(BREW_PREFIX)/include` and `-L$(BREW_PREFIX)/lib` automatically. If you have Homebrew in a non-standard location, set `BREW_PREFIX` in the Makefile or export it in your shell.
-- Example install command for required libraries on macOS (Apple Silicon):
-
-```bash
-brew install gsl fftw hdf5 armadillo cfitsio ccfits eigen openblas
-```
-
-- The `lc` module compiles with `-std=c++17` (Eigen requires C++14+). If you encounter standard-library errors, ensure your Xcode Command Line Tools and Homebrew packages are up to date.
-
-## Quick Build Matrix
-
-- Build `lc` (example):
-
-```bash
-cd lc
-make check   # optional; verifies Homebrew libs
-make         # produces ./executable_lc
-```
-
-- Build image creator:
-
-```bash
-cd postprocessing/create_image
-make
-```
-
-## Next steps I can help with
-
-- Add per-function docstrings and a developer guide for `readTNGParticle` and `IGM_Ino14`.
-- Replace deprecated `sprintf` usage with `snprintf` across the codebase.
-- Add small example inputs and a test run for the `lc` module.
-
-If you want me to expand documentation for specific files or functions (for instance `readTNGParticle.h` or `IGM_Ino14.cpp`), tell me which file and I'll produce function-level explanations and example usage.
-

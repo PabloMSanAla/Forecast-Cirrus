@@ -1,5 +1,23 @@
 # CHANGELOG
 
+[2026-10-22 17:30] Agent: Antigravity
+Module: docs / README
+
+Action:
+Completely overhauled root README.md to reflect the modern pipeline architecture:
+1. Replaced legacy manual Makefile editing and Homebrew setup with pure Conda environment installation (`conda env create -f environment.yml`, `make all`, `make install`).
+2. Documented system hardware requirements and low-RAM capabilities, highlighting streaming execution, memory ceiling enforcement (`-m <GB>`), and safe execution on 4 GB / 8 GB consumer machines.
+3. Added full CLI reference for the unified `forecast` command-line tool.
+4. Added module-by-module execution reference for `lc`, `df`, `dc`, `igm`, and `create_image`.
+5. Added parallel batch execution guide for GNU Parallel runner scripts (`lc.sh`, `df.sh`, `dc.sh`, `igm.sh`, `im.sh`, `forecast.sh`).
+6. Documented Python postprocessing API (`forecast.postprocessing`) and pipeline standard exit codes (0, 1, 2, 3).
+
+Rationale: Provide clean, user-facing documentation aligned with current pipeline features and CLI interfaces.
+
+Performance Delta: N/A (Documentation).
+
+RAM Delta: N/A (Documentation).
+
 [2026-10-07 15:30] Agent: Antigravity
 Module: packaging / python / postprocessing / conda-recipe
 
