@@ -6,5 +6,24 @@ docs/_doxygen/
 TEST*.md
 validation_report.md
 *.pyc
-.DS_Store
+__pycache__/
+*.egg-info/
+build/
+dist/
 dc/testfile
+
+# Compiled binaries and object files
+*.o
+*.a
+*.so
+*.dylib
+executable_*
+lc/executable_lc
+df/executable_df
+dc/executable_dc
+igm/executable_igm
+postprocessing/create_image/create_image
+tools/make_lc_plane/make_lc_plane
+bin/executable_*
+bin/create_image
+bin/make_lc_plane
