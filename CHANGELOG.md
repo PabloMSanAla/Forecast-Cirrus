@@ -1,5 +1,26 @@
 # CHANGELOG
 
+[2026-10-26 13:45] Agent: Antigravity
+Module: cli, forecast.sh
+
+Action:
+Added `--skip-lc` and `--start-from <module>` options to both `forecast run` and `forecast.sh`:
+1. `forecast.sh`:
+   - Added `--skip-lc` and `--start-from {lc,df,dc,igm}` CLI flags.
+   - Sets environment variables (`FORECAST_SKIP_LC`, `FORECAST_SKIP_DF`, `FORECAST_SKIP_DC`, `FORECAST_SKIP_IGM`) propagated into GNU parallel worker jobs.
+   - Skips binary existence checks and execution for any skipped module in `run_forecast_pipeline`.
+2. `forecast/cli.py`:
+   - Exposed `--skip-lc` and `--start-from` on the `forecast run` subcommand and forwards them to `forecast.sh`.
+3. Added automated unit test in `tests/test_yaml_cli.py` (`test_forecast_run_skip_options`) and updated `README.md`.
+
+Rationale: Allow users to run the complete batch pipeline on existing lightcone geometry outputs (`coords.lc.*.txt`) without recomputing the expensive lightcone slicing step, or to resume execution starting from any specific module (`df`, `dc`, `igm`).
+
+Performance Delta: Significant time savings by eliminating redundant lightcone particle slicing.
+
+RAM Delta: N/A.
+
+
+
 [2026-10-26 12:15] Agent: Antigravity
 Module: df, dc, igm, common, cli, Makefile
 

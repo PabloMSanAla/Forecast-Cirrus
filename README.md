@@ -120,6 +120,12 @@ forecast <lc|df|dc|igm|image> -c forecast.yaml -n 4 -m 4.0
 # Run the complete end-to-end pipeline across all planes
 forecast run -c forecast.yaml -n 4 -m 4.0
 
+# Run pipeline skipping LC (runs DF -> DC -> IGM)
+forecast run -c forecast.yaml -n 4 --skip-lc
+
+# Or start the pipeline from a specific module (e.g. df, dc, igm)
+forecast run -c forecast.yaml -n 4 --start-from df
+
 # Stack plane FITS images into a final lightcone mosaic
 forecast stack -c forecast.yaml
 ```

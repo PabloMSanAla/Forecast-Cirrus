@@ -32,6 +32,8 @@ Options:
   -j, --joblog:  Path to file where GNU parallel logs job run statistics
   -r, --results: Directory path where stdout/stderr of each job is stored
   -f, --force:   Force recomputation of all modules even if output files exist
+  --skip-lc:     Skip LC module (Lightcone Geometry slicing)
+  --start-from:  Start pipeline from specific module (lc, df, dc, igm)
   -h, --help:    Show this help message and exit
 
 Example usage:
@@ -59,6 +61,8 @@ ini_dc=""
 ini_igm=""
 memory_ceiling_gb=4.0
 force_run=false
+skip_lc=false
+start_from=""
 joblog_file=""
 results_dir=""
 
@@ -129,6 +133,14 @@ while [[ $# -gt 0 ]]; do
             force_run=true
             shift
             ;;
+        --skip-lc)
+            skip_lc=true
+            shift
+            ;;
+        --start-from)
+            start_from="$2"
+            shift 2
+            ;;
         *)
             echo "Unknown option: $1"
             help
@@ -136,6 +148,27 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+# Configure skip flags based on start_from
+skip_df=false
+skip_dc=false
+skip_igm=false
+
+if [ "$start_from" = "df" ]; then
+    skip_lc=true
+elif [ "$start_from" = "dc" ]; then
+    skip_lc=true
+    skip_df=true
+elif [ "$start_from" = "igm" ]; then
+    skip_lc=true
+    skip_df=true
+    skip_dc=true
+fi
+
+export FORECAST_SKIP_LC="$skip_lc"
+export FORECAST_SKIP_DF="$skip_df"
+export FORECAST_SKIP_DC="$skip_dc"
+export FORECAST_SKIP_IGM="$skip_igm"
 
 # Check if GNU parallel is installed
 if ! command -v parallel &> /dev/null; then
@@ -350,6 +383,16 @@ exe_dc=$(find_executable dc)
 exe_igm=$(find_executable igm)
 
 for mod in lc df dc igm; do
+    is_skipped=false
+    case $mod in
+        lc)  is_skipped="$FORECAST_SKIP_LC" ;;
+        df)  is_skipped="$FORECAST_SKIP_DF" ;;
+        dc)  is_skipped="$FORECAST_SKIP_DC" ;;
+        igm) is_skipped="$FORECAST_SKIP_IGM" ;;
+    esac
+    if [ "$is_skipped" = "true" ]; then
+        continue
+    fi
     eval "exe_path=\$exe_${mod}"
     if [ -z "$exe_path" ] || [ ! -x "$exe_path" ]; then
         echo "Error: Executable for '$mod' (executable_${mod}) not found or not executable."
@@ -366,15 +409,17 @@ echo "  Processors:    $num_processors"
 echo "  Plane range:   $init_plane to $max_planes"
 echo "  Memory limit:  $memory_ceiling_gb GB per process"
 echo "  Force rerun:   $force_run"
+echo "  Skip LC:       $skip_lc"
+[ -n "$start_from" ] && echo "  Start from:    $start_from"
 echo "  Script root:   $SCRIPT_DIR"
-echo "  LC  Executable:$exe_lc"
-echo "  DF  Executable:$exe_df"
-echo "  DC  Executable:$exe_dc"
-echo "  IGM Executable:$exe_igm"
-echo "  LC  Output:    $out_dir_lc (ini: $ini_lc)"
-echo "  DF  Output:    $out_dir_df (ini: $ini_df)"
-echo "  DC  Output:    $out_dir_dc (ini: $ini_dc)"
-echo "  IGM Output:    $out_dir_igm (ini: $ini_igm)"
+[ "$skip_lc" != "true" ] && echo "  LC  Executable:$exe_lc"
+[ "$skip_df" != "true" ] && echo "  DF  Executable:$exe_df"
+[ "$skip_dc" != "true" ] && echo "  DC  Executable:$exe_dc"
+[ "$skip_igm" != "true" ] && echo "  IGM Executable:$exe_igm"
+[ "$skip_lc" != "true" ] && echo "  LC  Output:    $out_dir_lc (ini: $ini_lc)"
+[ "$skip_df" != "true" ] && echo "  DF  Output:    $out_dir_df (ini: $ini_df)"
+[ "$skip_dc" != "true" ] && echo "  DC  Output:    $out_dir_dc (ini: $ini_dc)"
+[ "$skip_igm" != "true" ] && echo "  IGM Output:    $out_dir_igm (ini: $ini_igm)"
 [ -n "$joblog_file" ] && echo "  Job log:       $joblog_file"
 [ -n "$results_dir" ] && echo "  Results dir:   $results_dir"
 echo "============================================================"
@@ -428,7 +473,9 @@ run_forecast_pipeline() {
     # -------------------------------------------------------------
     # 1. Module LC
     # -------------------------------------------------------------
-    if [ "$force" != "true" ] && [ -s "$exp_lc" ]; then
+    if [ "$FORECAST_SKIP_LC" = "true" ]; then
+        echo "  [1/4 LC]  [SKIP] Skipped by user request (--skip-lc / --start-from)"
+    elif [ "$force" != "true" ] && [ -s "$exp_lc" ]; then
         echo "  [1/4 LC]  [SKIP] Output exists: $exp_lc"
     else
         echo "  [1/4 LC]  Running executable_lc for snap ${snapshot}, plane ${plane}..."
@@ -442,7 +489,9 @@ run_forecast_pipeline() {
     # -------------------------------------------------------------
     # 2. Module DF
     # -------------------------------------------------------------
-    if [ "$force" != "true" ] && [ -s "$exp_df" ]; then
+    if [ "$FORECAST_SKIP_DF" = "true" ]; then
+        echo "  [2/4 DF]  [SKIP] Skipped by user request (--start-from)"
+    elif [ "$force" != "true" ] && [ -s "$exp_df" ]; then
         echo "  [2/4 DF]  [SKIP] Output exists: $exp_df"
     else
         echo "  [2/4 DF]  Running executable_df for snap ${snapshot}, plane ${plane}..."
@@ -456,7 +505,9 @@ run_forecast_pipeline() {
     # -------------------------------------------------------------
     # 3. Module DC
     # -------------------------------------------------------------
-    if [ "$force" != "true" ] && [ -s "$exp_dc" ]; then
+    if [ "$FORECAST_SKIP_DC" = "true" ]; then
+        echo "  [3/4 DC]  [SKIP] Skipped by user request (--start-from)"
+    elif [ "$force" != "true" ] && [ -s "$exp_dc" ]; then
         echo "  [3/4 DC]  [SKIP] Output exists: $exp_dc"
     else
         echo "  [3/4 DC]  Running executable_dc for snap ${snapshot}, plane ${plane}..."
@@ -470,7 +521,9 @@ run_forecast_pipeline() {
     # -------------------------------------------------------------
     # 4. Module IGM
     # -------------------------------------------------------------
-    if [ "$force" != "true" ] && [ -s "$exp_igm" ]; then
+    if [ "$FORECAST_SKIP_IGM" = "true" ]; then
+        echo "  [4/4 IGM] [SKIP] Skipped by user request"
+    elif [ "$force" != "true" ] && [ -s "$exp_igm" ]; then
         echo "  [4/4 IGM] [SKIP] Output exists: $exp_igm"
     else
         echo "  [4/4 IGM] Running executable_igm for snap ${snapshot}, plane ${plane}..."

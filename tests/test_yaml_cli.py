@@ -103,5 +103,12 @@ class TestYamlCLI(unittest.TestCase):
         self.assertEqual(res_chk.returncode, 0)
         self.assertIn("Pipeline configuration is READY", res_chk.stdout)
 
+    def test_forecast_run_skip_options(self):
+        """Test that forecast run displays and accepts --skip-lc and --start-from."""
+        res = subprocess.run(["forecast", "run", "--help"], capture_output=True, text=True)
+        self.assertEqual(res.returncode, 0)
+        self.assertIn("--skip-lc", res.stdout)
+        self.assertIn("--start-from", res.stdout)
+
 if __name__ == "__main__":
     unittest.main()

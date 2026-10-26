@@ -399,6 +399,10 @@ def cmd_run(args):
         cmd.extend(["-r", str(args.results)])
     if args.force:
         cmd.append("-f")
+    if getattr(args, "skip_lc", False):
+        cmd.append("--skip-lc")
+    if getattr(args, "start_from", None):
+        cmd.extend(["--start-from", args.start_from])
 
     print(f"[RUN] {' '.join(cmd)}")
     res = subprocess.run(cmd)
@@ -502,6 +506,8 @@ def main():
     p_run.add_argument("-j", "--joblog", help="Path to file where GNU parallel logs job run statistics")
     p_run.add_argument("-r", "--results", help="Directory path where stdout/stderr of each job is stored")
     p_run.add_argument("-f", "--force", action="store_true", help="Force recomputation")
+    p_run.add_argument("--skip-lc", action="store_true", help="Skip LC module (Lightcone Geometry slicing)")
+    p_run.add_argument("--start-from", choices=["lc", "df", "dc", "igm"], help="Start pipeline from specific module (e.g. df, dc, igm)")
     p_run.set_defaults(func=cmd_run)
 
     # single plane
