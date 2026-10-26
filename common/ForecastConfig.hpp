@@ -34,6 +34,7 @@ struct Config {
     std::string bc03_dir = "";
     std::string filters_file = "";
     std::string filters_dir = "";
+    std::string age_list_file = "";
 
     // 4. Extinction & Gas (DC module)
     int dc_read_gas_mode = 1;
@@ -150,6 +151,7 @@ struct Config {
             if (sps["bc03_dir"]) cfg.bc03_dir = resolvePath(base_dir, sps["bc03_dir"].as<std::string>());
             if (sps["filters_file"]) cfg.filters_file = resolvePath(base_dir, sps["filters_file"].as<std::string>());
             if (sps["filters_dir"]) cfg.filters_dir = resolvePath(base_dir, sps["filters_dir"].as<std::string>());
+            if (sps["age_list_file"]) cfg.age_list_file = resolvePath(base_dir, sps["age_list_file"].as<std::string>());
         }
 
         // Module-specific options

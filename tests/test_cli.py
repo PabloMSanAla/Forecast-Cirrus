@@ -22,8 +22,8 @@ from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
 DEFAULT_PLANES_LIST_PATHS = [
+    Path(__file__).resolve().parent.parent / "lc" / "planes_list.txt",
     Path("/Volumes/PMSAdrive/pmsa/storage/TNG/optimization/planes_list.txt"),
-    Path("/Users/pmsanch1/code/FORECAST/lc/planes_list.txt"),
     Path("./lc/planes_list.txt"),
     Path("./planes_list.txt"),
 ]

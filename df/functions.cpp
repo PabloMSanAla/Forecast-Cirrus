@@ -297,6 +297,8 @@ void readParameters(double *boxl, double *zs,
 		    string *pathsnap, string *lcpath, string *bc03dir, string *rdir,
 		    string *model, string *imf,
 		    string *planes_file,
+		    string *filters_dir,
+		    string *filagelist,
 		    const string& custom_ini){ 
 
   string cfg_path = custom_ini;
@@ -318,6 +320,8 @@ void readParameters(double *boxl, double *zs,
       *boxl = cfg.box_size_mpc_over_h;
       *zs = cfg.source_redshift;
       *filfilters = cfg.filters_file;
+      if (filters_dir) *filters_dir = cfg.filters_dir;
+      if (filagelist) *filagelist = cfg.age_list_file;
       *filredshiftlist = cfg.redshift_list_file;
       *filsnaplist = cfg.snaplist_file;
       *filtimelist = cfg.timelist_file;

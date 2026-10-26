@@ -161,6 +161,8 @@ int main(int argc, char** argv) {
   string model, imf;
   string filextc;
   string planes_file_ini;
+  string filters_dir = "";
+  string filagelist = "";
 
   readParameters(&boxl, &maglim,
                  &filfilters, &filsnaplist, &filtimelist, &idc,
@@ -169,6 +171,8 @@ int main(int argc, char** argv) {
                  &model, &imf,
                  &filextc,
                  &planes_file_ini,
+                 &filters_dir,
+                 &filagelist,
                  custom_ini);
 
   // 3. Resolve planes_list.txt
@@ -251,18 +255,52 @@ int main(int argc, char** argv) {
   timelist.close();
 
   // 5. Load Age Table (age_bc03.txt or age_cb16.txt)
-  string filagelist = "../files/age_" + model + ".txt";
+  string filters_basedir = "";
+  size_t last_slash = filfilters.find_last_of('/');
+  if (last_slash != string::npos) {
+    filters_basedir = filfilters.substr(0, last_slash + 1);
+  }
+
+  if (filagelist.empty() || !ifstream(filagelist.c_str()).good()) {
+    vector<string> age_candidates;
+    if (!filagelist.empty()) age_candidates.push_back(filagelist);
+    if (!filters_dir.empty()) {
+      age_candidates.push_back(filters_dir + "../age_" + model + ".txt");
+      age_candidates.push_back(filters_dir + "age_" + model + ".txt");
+    }
+    if (!filters_basedir.empty()) {
+      age_candidates.push_back(filters_basedir + "age_" + model + ".txt");
+      age_candidates.push_back(filters_basedir + "files/age_" + model + ".txt");
+    }
+    if (!bc03dir.empty()) {
+      age_candidates.push_back(bc03dir + "age_" + model + ".txt");
+      age_candidates.push_back(bc03dir + "../files/age_" + model + ".txt");
+    }
+    const char* env_fdir = std::getenv("FORECAST_DIR");
+    if (env_fdir && env_fdir[0] != '\0') {
+      age_candidates.push_back(string(env_fdir) + "/files/age_" + model + ".txt");
+    }
+    age_candidates.push_back("files/age_" + model + ".txt");
+    age_candidates.push_back("../files/age_" + model + ".txt");
+
+    bool found_age = false;
+    for (const auto& cand : age_candidates) {
+      if (ifstream(cand.c_str()).good()) {
+        filagelist = cand;
+        found_age = true;
+        break;
+      }
+    }
+    if (!found_age) {
+      cerr << "Error: age list file for model " << model << " ('age_" << model << ".txt') could not be found." << endl;
+      cerr << "  Please check sps.filters_dir, sps.bc03_dir, or sps.age_list_file in configuration." << endl;
+      exit(2);
+    }
+  }
+
   ifstream agelist(filagelist.c_str());
   if (!agelist.is_open()) {
-    filagelist = "files/age_" + model + ".txt";
-    agelist.open(filagelist.c_str());
-  }
-  if (!agelist.is_open()) {
-    filagelist = "/Users/pmsanch1/code/FORECAST/files/age_" + model + ".txt";
-    agelist.open(filagelist.c_str());
-  }
-  if (!agelist.is_open()) {
-    cerr << "Error: age list file for model " << model << " could not be found." << endl;
+    cerr << "Error: age list file for model " << model << " (" << filagelist << ") could not be opened." << endl;
     exit(2);
   }
   vector<double> nage;
@@ -287,7 +325,15 @@ int main(int argc, char** argv) {
     if (extcurve.is_open()) filextc = alt_filextc;
   }
   if (!extcurve.is_open()) {
-    cerr << "Error: Extinction curve file " << filextc << " could not be found. Check EXTINCTION_FILE in dc.ini." << endl;
+    const char* env_fdir = std::getenv("FORECAST_DIR");
+    if (env_fdir && env_fdir[0] != '\0') {
+      string alt = string(env_fdir) + "/dc/extinctionCCM89.dat";
+      extcurve.open(alt.c_str());
+      if (extcurve.is_open()) filextc = alt;
+    }
+  }
+  if (!extcurve.is_open()) {
+    cerr << "Error: Extinction curve file " << filextc << " could not be found. Check EXTINCTION_FILE in dc.ini or modules.dc.extinction_file in forecast.yaml." << endl;
     exit(2);
   }
   vector<long double> ex_l;
@@ -305,19 +351,23 @@ int main(int argc, char** argv) {
   // 7. Load Cosmology Table
   ifstream infiledc(idc.c_str());
   if (!infiledc.is_open()) {
-    string idc_fallback = "files/LCDM-comovingdistTNG.dat";
-    infiledc.open(idc_fallback.c_str());
+    const char* env_fdir = std::getenv("FORECAST_DIR");
+    vector<string> idc_candidates;
+    if (env_fdir && env_fdir[0] != '\0') {
+      idc_candidates.push_back(string(env_fdir) + "/files/LCDM-comovingdistTNG.dat");
+    }
+    idc_candidates.push_back("files/LCDM-comovingdistTNG.dat");
+    idc_candidates.push_back("../files/LCDM-comovingdistTNG.dat");
+    for (const auto& cand : idc_candidates) {
+      if (ifstream(cand.c_str()).good()) {
+        idc = cand;
+        infiledc.open(idc.c_str());
+        break;
+      }
+    }
   }
   if (!infiledc.is_open()) {
-    string idc_fallback = "../files/LCDM-comovingdistTNG.dat";
-    infiledc.open(idc_fallback.c_str());
-  }
-  if (!infiledc.is_open()) {
-    string idc_fallback = "/Users/pmsanch1/code/FORECAST/files/LCDM-comovingdistTNG.dat";
-    infiledc.open(idc_fallback.c_str());
-  }
-  if (!infiledc.is_open()) {
-    cerr << "Error: comoving distance file " << idc << " could not be found." << endl;
+    cerr << "Error: comoving distance file " << idc << " could not be found. Check comoving_distances_file in configuration." << endl;
     exit(2);
   }
   vector<double> zl, dl, dlum;
@@ -332,19 +382,23 @@ int main(int argc, char** argv) {
   // 8. Load Filters
   ifstream listfilter(filfilters.c_str());
   if (!listfilter.is_open()) {
-    string flt_fallback = "files/filters.dat";
-    listfilter.open(flt_fallback.c_str());
+    const char* env_fdir = std::getenv("FORECAST_DIR");
+    vector<string> flt_candidates;
+    if (env_fdir && env_fdir[0] != '\0') {
+      flt_candidates.push_back(string(env_fdir) + "/files/filters.dat");
+    }
+    flt_candidates.push_back("files/filters.dat");
+    flt_candidates.push_back("../files/filters.dat");
+    for (const auto& cand : flt_candidates) {
+      if (ifstream(cand.c_str()).good()) {
+        filfilters = cand;
+        listfilter.open(filfilters.c_str());
+        break;
+      }
+    }
   }
   if (!listfilter.is_open()) {
-    string flt_fallback = "../files/filters.dat";
-    listfilter.open(flt_fallback.c_str());
-  }
-  if (!listfilter.is_open()) {
-    string flt_fallback = "/Users/pmsanch1/code/FORECAST/files/filters.dat";
-    listfilter.open(flt_fallback.c_str());
-  }
-  if (!listfilter.is_open()) {
-    cerr << "Error: filter list file " << filfilters << " could not be found." << endl;
+    cerr << "Error: filter list file " << filfilters << " could not be found. Check filters_file in configuration." << endl;
     exit(2);
   }
   vector<string> nfilter;
@@ -358,23 +412,41 @@ int main(int argc, char** argv) {
   std::vector<vector<long double>> fresp(Nfilters, vector<long double>(0));
   std::vector<vector<long double>> fwaves(Nfilters, vector<long double>(0));
 
-  string filter_dir = "../files/filters/";
-  {
-    ifstream test_f((filter_dir + nfilter[0] + ".dat").c_str());
-    if (!test_f.is_open()) {
-      filter_dir = "files/filters/";
-      ifstream test_f2((filter_dir + nfilter[0] + ".dat").c_str());
-      if (!test_f2.is_open()) {
-        filter_dir = "/Users/pmsanch1/code/FORECAST/files/filters/";
+  for (int N = 0; N < Nfilters; N++) {
+    string filterin = "";
+    // 1. Try explicit filters_dir from YAML if provided
+    if (!filters_dir.empty()) {
+      string cand1 = filters_dir + nfilter[N] + ".dat";
+      string cand2 = filters_dir + "filters/" + nfilter[N] + ".dat";
+      if (ifstream(cand1.c_str()).good()) filterin = cand1;
+      else if (ifstream(cand2.c_str()).good()) filterin = cand2;
+    }
+    // 2. Try directory of filters.dat
+    if (filterin.empty() && !filters_basedir.empty()) {
+      string cand1 = filters_basedir + "filters/" + nfilter[N] + ".dat";
+      string cand2 = filters_basedir + nfilter[N] + ".dat";
+      if (ifstream(cand1.c_str()).good()) filterin = cand1;
+      else if (ifstream(cand2.c_str()).good()) filterin = cand2;
+    }
+    // 3. Try FORECAST_DIR / standard relative paths
+    if (filterin.empty()) {
+      const char* env_fdir = std::getenv("FORECAST_DIR");
+      if (env_fdir && env_fdir[0] != '\0') {
+        string cand = string(env_fdir) + "/files/filters/" + nfilter[N] + ".dat";
+        if (ifstream(cand.c_str()).good()) filterin = cand;
       }
     }
-  }
+    if (filterin.empty()) {
+      if (ifstream(("files/filters/" + nfilter[N] + ".dat").c_str()).good()) {
+        filterin = "files/filters/" + nfilter[N] + ".dat";
+      } else if (ifstream(("../files/filters/" + nfilter[N] + ".dat").c_str()).good()) {
+        filterin = "../files/filters/" + nfilter[N] + ".dat";
+      }
+    }
 
-  for (int N = 0; N < Nfilters; N++) {
-    string filterin = filter_dir + nfilter[N] + ".dat";
     ifstream filterlist(filterin.c_str());
     if (!filterlist.is_open()) {
-      cerr << "Error: Filter file " << filterin << " is missing." << endl;
+      cerr << "Error: Filter file " << filterin << " is missing. Checked filters_dir: '" << filters_dir << "'." << endl;
       exit(2);
     }
     long double sa, sb;

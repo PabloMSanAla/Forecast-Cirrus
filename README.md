@@ -56,7 +56,6 @@ conda activate forecast
 ### 2. Build and Install
 Compile all C++ modules, link CLI binaries into `$CONDA_PREFIX/bin`, and install the Python package:
 ```bash
-make all
 make install
 ```
 

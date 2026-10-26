@@ -294,6 +294,8 @@ void readParameters(double *boxl, float *maglim,
 		    string *model, string *imf,
 		    string *filextc,
 		    string *planes_file,
+		    string *filters_dir,
+		    string *filagelist,
 		    const string& custom_ini){ 
 
   string cfg_path = custom_ini;
@@ -315,6 +317,8 @@ void readParameters(double *boxl, float *maglim,
       *boxl = cfg.box_size_mpc_over_h;
       *maglim = (float)cfg.dc_mag_limit_filter_0;
       *filfilters = cfg.filters_file;
+      if (filters_dir) *filters_dir = cfg.filters_dir;
+      if (filagelist) *filagelist = cfg.age_list_file;
       *filsnaplist = cfg.snaplist_file;
       *filtimelist = cfg.timelist_file;
       *idc = cfg.comoving_distances_file;

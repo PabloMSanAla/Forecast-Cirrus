@@ -62,6 +62,8 @@ void readParameters(double *boxl, float *maglim,
 		    string *model, string *imf,
 		    string *filextc,
 		    string *planes_file,
+		    string *filters_dir = nullptr,
+		    string *filagelist = nullptr,
 		    const string& custom_ini = "");
 
 bool allNegOne(const std::vector<float>& vec);

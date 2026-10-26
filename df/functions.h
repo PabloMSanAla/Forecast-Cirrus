@@ -61,6 +61,8 @@ void readParameters(double *boxl, double *zs,
 		    string *pathsnap, string *lcpath, string *bc03dir, string *rdir,
 		    string *model, string *imf,
 		    string *planes_file,
+		    string *filters_dir = nullptr,
+		    string *filagelist = nullptr,
 		    const string& custom_ini = "");
 
 

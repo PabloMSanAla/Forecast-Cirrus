@@ -1,6 +1,28 @@
 # CHANGELOG
 
-[2026-10-22 17:30] Agent: Antigravity
+[2026-10-26 12:15] Agent: Antigravity
+Module: df, dc, igm, common, cli, Makefile
+
+Action:
+1. Dynamic SPS & Filter Path Configuration:
+   - Updated `common/ForecastConfig.hpp` to parse optional `sps.age_list_file` and expose `filters_dir`.
+   - Updated `df/functions.cpp`, `df/functions.h`, `dc/functions.cpp`, `dc/functions.h`, `igm/functions.cpp`, and `igm/functions.h` to pass `filters_dir` and `filagelist` to `readParameters()`.
+   - Updated `df/main_df.cpp`, `dc/main_dc.cpp`, and `igm/main_igm.cpp` to strictly prioritize `filters_dir` defined in the YAML configuration before falling back to `filters_file` parent directory or `$FORECAST_DIR`.
+   - Updated age list (`age_<model>.txt`) resolution in `df`, `dc`, and `igm` to search candidates dynamically across `age_list_file`, `filters_dir`, `filters_basedir`, `bc03_dir`, `$FORECAST_DIR`, and local directories.
+2. Complete Hardcoded Path Elimination:
+   - Removed legacy fallback string paths referencing `/Users/pmsanch1/...` from `dc/main_dc.cpp`, `forecast/cli.py`, and `tests/test_cli.py`.
+   - All modules now dynamically resolve configuration, data files, and binaries using config parameters, `$FORECAST_DIR`, `Path.cwd()`, or relative to file locations.
+3. Git Hygiene & Makefile Fix:
+   - Removed tracked pre-compiled binaries and `__pycache__` artifacts from git tracking and verified `.gitignore` coverage.
+   - Fixed `Makefile` `clean` target which attempted to remove the `forecast/` directory.
+
+Rationale: In multi-machine and HPC cluster deployments (such as `sphinx`), configurations often place filter response curves (`.dat`) in a dedicated repository directory while keeping run catalogs and run-specific files in a scratch/work directory. Previously, `df`, `dc`, and `igm` ignored `filters_dir` and assumed filter curves lived alongside `filters_file`, and retained machine-specific fallback paths. This change ensures zero hardcoded paths exist and all paths specified in `forecast.yaml` are strictly honored.
+
+Performance Delta: N/A (Path resolution and robustness).
+
+RAM Delta: N/A.
+
+
 Module: docs / README
 
 Action:

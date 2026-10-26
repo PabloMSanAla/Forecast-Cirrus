@@ -35,12 +35,13 @@ def find_project_root():
     if (current / "lc").is_dir():
         return current
 
-    # 3. Known repository fallback
-    repo_default = Path("/Users/pmsanch1/code/FORECAST")
-    if repo_default.is_dir() and (repo_default / "lc").is_dir():
-        return repo_default
+    # 3. Check current working directory
+    cwd = Path.cwd().resolve()
+    if (cwd / "lc").is_dir():
+        return cwd
 
     return current
+
 
 PROJECT_ROOT = find_project_root()
 os.environ.setdefault("FORECAST_DIR", str(PROJECT_ROOT))

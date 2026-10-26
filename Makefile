@@ -86,7 +86,7 @@ clean:
 	$(MAKE) -C igm clean
 	$(MAKE) -C postprocessing/create_image clean
 	$(MAKE) -C tools/make_lc_plane clean
-	rm -f bin/executable_* bin/create_image bin/make_lc_plane forecast executable_lc executable_df executable_dc executable_igm
+	rm -f bin/executable_* bin/create_image bin/make_lc_plane executable_lc executable_df executable_dc executable_igm
 	$(MAKE) -C docs clean 2>/dev/null || true
 
 docs: html

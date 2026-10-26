@@ -300,6 +300,8 @@ void readParameters(double *boxl,
 		    string *pathsnap,string *bc03dir, string *dcpath, string *rdir,  
 		    string *model, string *imf,
 		    string *planes_file,
+		    string *filters_dir,
+		    string *filagelist,
 		    const string& custom_ini){ 
 
   string cfg_path = custom_ini;
@@ -320,6 +322,8 @@ void readParameters(double *boxl,
       auto cfg = forecast::Config::load(cfg_path);
       *boxl = cfg.box_size_mpc_over_h;
       *filfilters = cfg.filters_file;
+      if (filters_dir) *filters_dir = cfg.filters_dir;
+      if (filagelist) *filagelist = cfg.age_list_file;
       *filsnaplist = cfg.snaplist_file;
       *filtimelist = cfg.timelist_file;
       *idc = cfg.comoving_distances_file;
