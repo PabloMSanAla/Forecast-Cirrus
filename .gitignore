@@ -1,12 +1,16 @@
 *pdf
 .DS_Store
+**/.DS_Store
 docs/_build/
 docs/_doxygen/
 *.dSYM/
+**/*.dSYM/
 TEST*.md
 validation_report.md
 *.pyc
+**/*.pyc
 __pycache__/
+**/__pycache__/
 *.egg-info/
 build/
 dist/
